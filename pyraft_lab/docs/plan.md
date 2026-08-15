@@ -208,12 +208,42 @@ As built:
 - Persistence is opt-in throughout: a node built without a WAL behaves exactly as it did
   before this phase, which is why Phase 5's runner is untouched (architecture P6).
 
-### Phase 7 — Deterministic Replay (2.0 item 5)
+### Phase 7 — Deterministic Replay (2.0 item 5) — done
 
 Every run persists a manifest (`run_id`, `random_seed`, `scenario`, network config,
 fault timeline, workload, event trace). `pyraft-lab replay --run <id>` reconstructs the
 same run from that manifest and the Phase 4 event trace. Depends on Phase 4 (events)
 and Phase 5 (runner) both existing.
+
+As built:
+
+- `experiments/manifest.py` (done): `RunManifest` - a scenario's `to_dict()` plus the
+  three `ExperimentRunner` constructor knobs a scenario file does not itself carry
+  (`election_timeout_range`, `heartbeat_interval`, `client_timeout`). Network
+  configuration and the fault timeline need no separate fields - a scenario's
+  `faults:` list already is the fault timeline, and every network setting that changes
+  during a run arrives as a timeline step. See `docs/architecture.md` P7.
+- `experiments/replay.py` (done): `persist_run` writes one directory per run
+  (`manifest.json`, `events.jsonl`, `history.json`, `report.json` - the last three
+  already Phase 4/5 formats, reused rather than reinvented). `replay_run` rebuilds an
+  `ExperimentRunner` from the manifest, runs it again, and diffs the new event trace
+  against the persisted one field-for-field (including `seq`), returning a
+  `ReplayReport` rather than raising on a mismatch - a run that stops reproducing is a
+  finding, not a tooling error.
+- CLI: `pyraft-lab replay <run_id> [--results-dir results]`. There is deliberately no
+  `pyraft-lab run` yet to produce persisted runs with - the full CLI surface plan.md
+  assigns to Phase 9, and `persist_run` is fully usable from the Python API in the
+  meantime, exactly as Phase 5's scenario runner has been all along.
+- A genuine pre-existing bug surfaced while building the first replay tests: cancelling
+  a `race_deadline` loser on a `VirtualClock` left its timer leaking in the clock's
+  heap forever, and a busy scenario run could accumulate tens of thousands of them,
+  crawling forward in sub-millisecond steps instead of finishing. Fixed in
+  `network/clock.py` - see `docs/architecture.md` P7 - with a regression suite in
+  `tests/test_clock.py`. Predates Phase 7 (it lived in Day 8's code); nothing surfaced
+  it until replay needed a run to finish twice, reliably, in a test.
+- `experiments/scenario.py` and `experiments/runner.py` had no direct tests before this
+  phase despite being Phase 5 deliverables; `tests/test_scenario.py` and the
+  replay-focused `tests/test_replay.py` are the first coverage either has had.
 
 ### Phase 8 — Stress & Chaos Campaigns (2.0 items 7, 13)
 

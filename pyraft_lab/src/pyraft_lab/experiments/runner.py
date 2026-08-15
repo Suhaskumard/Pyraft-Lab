@@ -111,7 +111,14 @@ class AppliedFault:
 
 @dataclass
 class RunResult:
-    """Everything one run produced. Judged by ``metrics.py``, not here."""
+    """Everything one run produced. Judged by ``metrics.py``, not here.
+
+    ``election_timeout_range``/``heartbeat_interval``/``client_timeout`` are carried
+    along even though they never change during a run: Phase 7's replay reconstructs an
+    ``ExperimentRunner`` from a manifest built off this result, and those three are the
+    only constructor knobs a :class:`Scenario` does not itself encode - see
+    ``experiments/manifest.py``.
+    """
 
     scenario: Scenario
     run_id: str
@@ -124,6 +131,9 @@ class RunResult:
     clients: dict[NodeId, ClientMetrics]
     nodes: list[NodeSnapshot]
     faults: list[AppliedFault]
+    election_timeout_range: tuple[float, float] = ELECTION_TIMEOUT_RANGE
+    heartbeat_interval: float = HEARTBEAT_INTERVAL
+    client_timeout: float = CLIENT_TIMEOUT
 
     @property
     def surviving_log(self) -> list[Any]:
@@ -434,6 +444,9 @@ class ExperimentRunner:
             clients={cid: client.metrics for cid, client in self.clients.items()},
             nodes=snapshots,
             faults=self._applied,
+            election_timeout_range=self._election_timeout_range,
+            heartbeat_interval=self._heartbeat_interval,
+            client_timeout=self._client_timeout,
         )
 
     def _snapshot(self, node_id: NodeId) -> NodeSnapshot:

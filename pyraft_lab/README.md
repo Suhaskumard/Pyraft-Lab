@@ -24,7 +24,7 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 4 — Observability foundation | **done** — event vocabulary, run tracer, live metrics |
 | 5 — Laboratory core | **done** — scenario runner, fault timelines, metrics, linearizability |
 | 6 — Persistence & snapshots | **done** — checksummed WAL, crash recovery, snapshots + compaction |
-| 7 — Deterministic replay | not started |
+| 7 — Deterministic replay | **done** — run manifests, `pyraft-lab replay`, bit-identical trace diffing |
 | 8 — Stress & chaos | not started |
 | 9 — Cluster controller & CLI | not started |
 | 10 — Benchmarking | not started |
@@ -56,10 +56,34 @@ pyraft-lab kinds                      # message kinds this build can put on the 
 pyraft-lab inspect-wal <path>          # validate a WAL, print what a restart recovers
 pyraft-lab inspect-wal <path> --repair # discard from the first corrupt record onward
 pyraft-lab inspect-snapshot <path>     # verify and print a snapshot's metadata
+pyraft-lab replay <run_id>             # re-run a persisted run and diff its trace
 ```
 
 The cluster and experiment commands (`start`, `put`, `get`, `status`, `show-log`,
 `run --scenario ...`, `results`) arrive with their phases.
+
+## Deterministic replay
+
+Every scenario run is reproducible from its seed: one seed feeds every random source
+in `ExperimentRunner`, and time only moves because the runner advances a
+`VirtualClock`. `persist_run` writes what `replay_run` needs to prove it:
+
+```python
+from pyraft_lab.experiments.runner import ExperimentRunner
+from pyraft_lab.experiments.replay import persist_run, replay_run
+
+result = await ExperimentRunner(scenario).run()
+persist_run(result, "results")             # results/<run_id>/{manifest,events,history,report}
+
+comparison, replayed = await replay_run("results", result.run_id)
+print(comparison.explain())                # "MATCH (N events, bit-identical)", or a diff
+```
+
+```bash
+pyraft-lab replay <run_id> --results-dir results
+```
+
+A mismatch is reported, not raised - a run that stops reproducing is itself a finding.
 
 ## Persistence
 

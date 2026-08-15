@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from pyraft_lab.network.clock import Clock, VirtualClock, WallClock
+from pyraft_lab.network.clock import Clock, TimerHandle, VirtualClock, WallClock, race_deadline
 
 
 def test_wall_clock_satisfies_the_clock_protocol() -> None:
@@ -15,6 +15,16 @@ def test_wall_clock_satisfies_the_clock_protocol() -> None:
 
 def test_virtual_clock_satisfies_the_clock_protocol() -> None:
     assert isinstance(VirtualClock(), Clock)
+
+
+def test_virtual_clock_call_at_returns_something_cancellable() -> None:
+    assert isinstance(VirtualClock().call_at(1.0, lambda: None), TimerHandle)
+
+
+async def test_wall_clock_call_at_returns_something_cancellable() -> None:
+    handle = WallClock().call_at(WallClock().now() + 10.0, lambda: None)
+    assert isinstance(handle, TimerHandle)
+    handle.cancel()  # must not raise
 
 
 async def test_wall_clock_now_tracks_the_event_loop() -> None:
@@ -124,6 +134,116 @@ async def test_advance_to_rejects_moving_backward() -> None:
     clock = VirtualClock(start=5.0)
     with pytest.raises(ValueError, match="backward"):
         await clock.advance_to(4.0)
+
+
+# --- cancellation: a lost race must not leak its timer ----------------------------
+#
+# ``race_deadline`` cancels whichever side of a race loses. On a busy cluster that is
+# almost always the ``sleep_until`` side - a message beats the deadline nearly every
+# time - so this is the ordinary case, not an edge case, and it happens on every single
+# wait a node or client ever does. A leak here does not fail loudly: the run keeps
+# going, just slower and slower, which is why this needed a regression test of its own
+# rather than trusting the visible symptom (a hung experiment) to point back here.
+
+
+async def test_cancelling_a_waiter_removes_its_timer() -> None:
+    clock = VirtualClock()
+    fired = asyncio.Event()
+
+    async def waiter() -> None:
+        await clock.sleep_until(5.0)
+        fired.set()  # must never run - the waiter is cancelled before its deadline
+
+    task = asyncio.create_task(waiter())
+    await asyncio.sleep(0)
+    assert clock.pending() == 1
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert clock.pending() == 0
+    await clock.advance(10.0)
+    assert not fired.is_set()
+
+
+async def test_a_cancelled_timer_does_not_appear_as_the_next_deadline() -> None:
+    """The failure mode this actually caused: a driver reading ``next_deadline`` to
+    decide how far to jump must not be told a cancelled timer is still coming, or it
+    wastes a whole step retiring something that was never going to fire.
+    """
+    clock = VirtualClock()
+
+    async def waiter(deadline: float) -> None:
+        await clock.sleep_until(deadline)
+
+    soon = asyncio.create_task(waiter(1.0))
+    later = asyncio.create_task(waiter(10.0))
+    await asyncio.sleep(0)
+    assert clock.next_deadline() == 1.0
+
+    soon.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await soon
+
+    assert clock.next_deadline() == 10.0
+    await clock.advance(10.0)
+    await later
+
+
+async def test_many_lost_races_do_not_accumulate() -> None:
+    """The shape of the actual bug: hundreds of waits, each racing a fast winner and
+    losing, on a clock that never advances between them. Before the fix, every one of
+    these left a dead entry behind; ``pending()`` should stay at zero throughout.
+    """
+    clock = VirtualClock()
+
+    async def race_and_lose() -> None:
+        loser = asyncio.ensure_future(clock.sleep_until(clock.now() + 300.0))
+        winner_won = asyncio.Event()
+        winner_won.set()
+        await winner_won.wait()  # the "message arrived first" side of the race
+        loser.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await loser
+
+    for _ in range(500):
+        await race_and_lose()
+
+    assert clock.pending() == 0
+
+
+async def test_race_deadline_losing_repeatedly_does_not_leak() -> None:
+    """The exact shape of the real bug: ``race_deadline`` on a ``VirtualClock``, racing
+    a deadline that is always still far in the future against work that always finishes
+    first - a node reacting to a message that beats its election timeout, over and over,
+    on a cluster under load. Before the ``sleep_until`` fix, every one of these left a
+    dead timer in the heap; a busy run could accumulate tens of thousands of them
+    without the clock ever advancing far enough to retire any of it.
+    """
+    clock = VirtualClock()
+
+    async def instant() -> str:
+        return "message arrived"
+
+    for _ in range(500):
+        result = await race_deadline(clock, instant(), clock.now() + 300.0)
+        assert result == "message arrived"
+
+    assert clock.pending() == 0
+
+
+async def test_a_timer_that_already_fired_tolerates_a_late_cancel() -> None:
+    """Cancelling after the deadline has already been reached and the callback has
+    already run must not raise or resurrect anything - the handle is just inert by then.
+    """
+    clock = VirtualClock()
+    event = asyncio.Event()
+    handle = clock.call_at(clock.now(), event.set)  # fires immediately: deadline <= now
+
+    assert event.is_set()
+    handle.cancel()  # no-op, must not raise
+    assert clock.pending() == 0
 
 
 async def test_a_zero_delay_rearm_is_caught_by_the_same_advance() -> None:

@@ -19,6 +19,20 @@ T = TypeVar("T")
 
 
 @runtime_checkable
+class TimerHandle(Protocol):
+    """What ``call_at`` hands back: a way to say "never mind" about a timer that has
+    not fired yet.
+
+    Needed because a scheduled callback can outlive the coroutine that asked for it -
+    ``sleep_until``'s caller can be cancelled (``race_deadline`` does this to whichever
+    side loses the race) while its timer is still sitting in the clock waiting to fire.
+    Without a handle to cancel, that timer has nothing to tell it the wait is over.
+    """
+
+    def cancel(self) -> None: ...
+
+
+@runtime_checkable
 class Clock(Protocol):
     """What a timer needs: the current time, a way to wait for a later one, and a way
     to schedule a plain callback for a later one without suspending a coroutine at
@@ -30,7 +44,7 @@ class Clock(Protocol):
 
     async def sleep_until(self, deadline: float) -> None: ...
 
-    def call_at(self, deadline: float, callback: Callable[[], None]) -> None: ...
+    def call_at(self, deadline: float, callback: Callable[[], None]) -> TimerHandle: ...
 
 
 class WallClock:
@@ -43,9 +57,29 @@ class WallClock:
         remaining = max(0.0, deadline - self.now())
         await asyncio.sleep(remaining)
 
-    def call_at(self, deadline: float, callback: Callable[[], None]) -> None:
+    def call_at(self, deadline: float, callback: Callable[[], None]) -> TimerHandle:
         delay = max(0.0, deadline - self.now())
-        asyncio.get_running_loop().call_later(delay, callback)
+        # asyncio's own TimerHandle already has the ``cancel()`` this protocol asks
+        # for - nothing to wrap.
+        return asyncio.get_running_loop().call_later(delay, callback)
+
+
+class _VirtualTimerHandle:
+    """A cancel flag a heap entry can be tagged with.
+
+    ``heapq`` has no way to remove an entry from the middle, so cancellation is lazy
+    deletion: mark it and let whoever next looks at the front of the heap discard it.
+    Cheap because the alternative - a timer nobody ever cancels - is not: see the
+    ``VirtualClock`` docstring for what leaving these to pile up costs.
+    """
+
+    __slots__ = ("cancelled",)
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
 
 
 class VirtualClock:
@@ -56,34 +90,56 @@ class VirtualClock:
     until :meth:`advance` is called, which is what makes a run reproducible: the same
     sequence of ``advance`` calls against the same seeded RNGs produces the same
     outcome regardless of how fast the test machine happens to be.
+
+    Cancellation matters here in a way it would not on a real clock. ``race_deadline``
+    cancels whichever side of a race loses, and on a busy cluster the *deadline* side -
+    a node's election timeout, a client's retry backoff - loses almost every time,
+    because a message arrives first. Every one of those losing timers has already been
+    pushed onto :attr:`_pending`; if cancelling the coroutine did not also cancel the
+    timer, each one would sit in the heap forever, un-fired and unreachable, while a
+    busy run keeps creating more of them. The heap does not merely waste memory in that
+    case - :meth:`next_deadline` keeps reporting the oldest of these dead timers as the
+    next thing to happen, so the driver spends one whole outer iteration retiring each
+    one, and a run that should finish in milliseconds instead grinds forward in
+    sub-millisecond steps against a backlog that grows faster than it drains.
     """
 
     def __init__(self, start: float = 0.0) -> None:
         self._now = start
-        self._pending: list[tuple[float, int, Callable[[], None]]] = []
+        self._pending: list[tuple[float, int, _VirtualTimerHandle, Callable[[], None]]] = []
         self._counter = itertools.count()
 
     def now(self) -> float:
         return self._now
 
-    def call_at(self, deadline: float, callback: Callable[[], None]) -> None:
+    def call_at(self, deadline: float, callback: Callable[[], None]) -> TimerHandle:
         """Register synchronously - unlike ``sleep_until``, there is no coroutine here
         to suspend, so nothing has to wait for a scheduling tick before the callback
         counts as registered. This is what lets ``SimulatedNetwork.send`` register a
         delivery's timer in the same call that samples its delay, rather than a task
         that might not get its first turn to run before the next ``advance``.
         """
+        handle = _VirtualTimerHandle()
         if deadline <= self._now:
             callback()
-            return
-        heapq.heappush(self._pending, (deadline, next(self._counter), callback))
+            return handle
+        heapq.heappush(self._pending, (deadline, next(self._counter), handle, callback))
+        return handle
 
     async def sleep_until(self, deadline: float) -> None:
         if deadline <= self._now:
             return
         event = asyncio.Event()
-        self.call_at(deadline, event.set)
-        await event.wait()
+        handle = self.call_at(deadline, event.set)
+        try:
+            await event.wait()
+        except asyncio.CancelledError:
+            # The coroutine waiting on this timer was cancelled out from under it -
+            # ``race_deadline`` does exactly this to the side that loses a race. Without
+            # this, the timer we just registered would stay in the heap with nothing
+            # left that will ever look at it firing.
+            handle.cancel()
+            raise
 
     async def advance(self, delta: float) -> None:
         """Move time forward by ``delta`` seconds, firing whatever falls due."""
@@ -95,18 +151,34 @@ class VirtualClock:
         Callbacks run one at a time, yielding after each so a callback that reacts by
         registering another zero-delay timer (a heartbeat immediately re-arming, say)
         is caught by the next pass rather than left stranded until some later advance.
+        A cancelled entry is discarded without yielding for it - nothing happened, so
+        there is nothing for another task to react to.
         """
         if target < self._now:
             raise ValueError(f"virtual clock cannot move backward ({target} < {self._now})")
 
         self._now = target
         while self._pending and self._pending[0][0] <= target:
-            _, _, callback = heapq.heappop(self._pending)
+            _, _, handle, callback = heapq.heappop(self._pending)
+            if handle.cancelled:
+                continue
             callback()
             await asyncio.sleep(0)
 
+    def _prune(self) -> None:
+        """Drop cancelled entries waiting at the front of the heap.
+
+        Only the front needs pruning - anything behind a live entry cannot affect
+        :meth:`next_deadline`'s answer, and :meth:`advance_to` discards the rest as it
+        reaches them. Called from both read methods below so neither one reports a
+        cancelled timer's deadline as something that is actually going to happen.
+        """
+        while self._pending and self._pending[0][2].cancelled:
+            heapq.heappop(self._pending)
+
     def pending(self) -> int:
-        """How many timers are still waiting for a future ``advance``."""
+        """How many *live* timers are still waiting for a future ``advance``."""
+        self._prune()
         return len(self._pending)
 
     def next_deadline(self) -> float | None:
@@ -117,6 +189,7 @@ class VirtualClock:
         difference between a 30-second scenario taking milliseconds and taking 6000
         pointless steps.
         """
+        self._prune()
         return self._pending[0][0] if self._pending else None
 
 

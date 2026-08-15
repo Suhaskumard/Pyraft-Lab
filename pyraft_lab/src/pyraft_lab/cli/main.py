@@ -7,10 +7,17 @@ Phase 6 adds the two commands that only need a file to answer honestly: reading 
 WAL and reading back a snapshot. 2.0 item 10's ``--node`` forms of these (``snapshot
 --node node-3``, ``inspect-snapshot --node node-3``) need a running cluster to address,
 so they arrive with the cluster controller in Phase 9 rather than being faked now.
+
+Phase 7 adds ``replay``, addressed by ``run_id`` against a directory of persisted runs.
+There is deliberately no ``pyraft-lab run`` yet to produce those directories with - that
+command needs the cluster/experiment CLI surface plan.md assigns to Phase 9, and a run
+is fully usable from the Python API in the meantime (``persist_run`` in
+``experiments/replay.py``), exactly as Phase 5's scenario runner has been all along.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -142,6 +149,36 @@ def inspect_snapshot(
 
     for key in sorted(snapshot.data)[:keys]:
         typer.echo(f"    {key} = {snapshot.data[key]!r}")
+
+
+@app.command("replay")
+def replay(
+    run_id: Annotated[str, typer.Argument(help="The run_id to replay, from its manifest.")],
+    results_dir: Annotated[
+        Path, typer.Option("--results-dir", help="Where persisted runs live.")
+    ] = Path("results"),
+) -> None:
+    """Reconstruct a persisted run from its manifest and check it reproduces exactly.
+
+    2.0 item 5: every run persisted by ``persist_run`` can be handed back to
+    ``ExperimentRunner`` and produce the identical event trace, because every source of
+    randomness derives from one seed and time only moves because the runner advances a
+    virtual clock. A mismatch means something about the run stopped being deterministic
+    - a real finding, not a tooling failure - so it is reported rather than raised.
+    """
+    from pyraft_lab.experiments.manifest import ManifestError
+    from pyraft_lab.experiments.replay import ReplayError, replay_run
+    from pyraft_lab.experiments.scenario import ScenarioError
+
+    try:
+        comparison, _ = asyncio.run(replay_run(results_dir, run_id))
+    except (ReplayError, ManifestError, ScenarioError) as exc:
+        typer.echo(f"cannot replay {run_id!r}: {exc}")
+        raise typer.Exit(2) from exc
+
+    typer.echo(comparison.explain())
+    if not comparison.matched:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover

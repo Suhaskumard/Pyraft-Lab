@@ -425,6 +425,68 @@ is a restart that keeps its state — which is Phase 8's chaos campaign, whose s
 invariant is "committed data is never silently lost". Wiring it in there is one constructor
 argument, and it belongs to that phase rather than being pre-emptively bolted on here.
 
+### P7 — a manifest is the scenario plus three knobs, nothing else
+
+**Decision:** `RunManifest` (`experiments/manifest.py`) carries `run_id`, `seed`,
+`Scenario.to_dict()`, and `election_timeout_range`/`heartbeat_interval`/`client_timeout`
+- the only three `ExperimentRunner` constructor arguments a scenario file does not
+already encode.
+
+**Why:** 2.0 item 5 asks for "run_id, random_seed, scenario, network configuration,
+fault timeline, workload, event trace" as if these were seven independent things to
+capture. Three of them already collapse: a scenario's `faults:` timeline *is* the fault
+timeline, and every network setting that ever changes during a run (latency, loss)
+arrives as a timeline step (`LATENCY`/`PACKET_LOSS` actions) rather than as separate
+static configuration - so "network configuration" has no content a scenario doesn't
+already carry, and `workload:` is a field of the same scenario. Writing a manifest that
+duplicated these would create two sources of truth for one run's inputs, with no way to
+tell which one a bug should be blamed on.
+
+### P7 — replay proves determinism, it does not assume it
+
+**Decision:** `replay_run` reconstructs an `ExperimentRunner` from a manifest, runs it
+again, and diffs the new event trace against the persisted one field-for-field -
+including `seq`, since a `VirtualClock` run can have many events share one timestamp
+(P4) and `seq` is the only thing that orders them. A mismatch is returned as a
+`ReplayReport`, not raised.
+
+**Why:** Phase 5's determinism (one seed feeds every random source; time only moves
+because the runner advances a `VirtualClock`) was a design *claim* until something
+actually exercised it by running the same inputs twice and comparing. Building that
+proof is what turns "the runner is deterministic" from an architectural argument into a
+falsifiable, per-run check - and per 2.0's own framing, a mismatch is itself a genuine
+finding (something about the run stopped reproducing), not a tooling failure, so it is
+reported like a linearizability violation rather than thrown as an exception.
+
+### P7 — a virtual timer must be cancelled, not merely orphaned
+
+**Decision:** `VirtualClock.call_at` returns a `TimerHandle`; `sleep_until` cancels its
+own handle when the coroutine awaiting it is cancelled from outside.
+
+**Why:** found while building the first replay tests, not designed in from the start -
+a real bug, and worth recording as one. `race_deadline`'s general path (`network/
+clock.py`, D8) races a deadline against real work and cancels whichever side loses.
+On a busy cluster the *deadline* side loses almost every time, because a message
+arrives before an election timeout or a client's retry backoff ever comes due - which
+means it is the ordinary case, not an edge case, and it happens on every wait a node or
+client performs. Before this fix, cancelling the *task* left the timer it had registered
+sitting in `VirtualClock`'s heap forever: nothing had ever cancelled the heap entry
+itself, only the coroutine that no longer cared about it. A long or busy run accumulated
+these by the tens of thousands, and `next_deadline()` kept reporting the oldest one as
+the next thing to happen - so the driver spent a whole outer iteration retiring each
+dead timer one at a time, and a scenario that should finish in milliseconds instead
+crawled forward in sub-millisecond steps, never finishing in practice. Fixed by handing
+`sleep_until` a cancellable handle and having it cancel that handle in its own
+`except CancelledError` - lazy deletion at the front of the heap, checked by
+`next_deadline`/`pending`/`advance_to` alike, so a cancelled timer can never again be
+reported as pending or advanced through as if it mattered.
+
+The bug predates Phase 7 - it lived in Day 8's `race_deadline`/`VirtualClock` and could
+have bitten any sufficiently long or busy scenario run - but nothing surfaced it until
+Phase 7 needed a scenario to run start-to-finish reliably enough to replay, twice, in a
+test. Recorded here because "replay was the thing that finally noticed" is itself worth
+knowing the next time a laboratory run behaves strangely for no visible reason.
+
 ## Deferred
 
 - **InstallSnapshot.** Listed in the specification's RPC table but assigned no day, and
