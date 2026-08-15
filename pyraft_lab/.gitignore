@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Experiment output is regenerated from seeds, not committed.
+# Benchmark results published on Day 14 are committed explicitly with `git add -f`.
+results/*
+!results/.gitkeep
+
+# WAL files written by running nodes
+*.wal
+data/
