@@ -84,9 +84,10 @@ class Get(Command):
 
     A read changes nothing, so replicating it through the log is not what makes it
     correct - it is here so a read can be *ordered* against writes in a recorded
-    history, which is what Phase 5's linearizability checker consumes. The cheap
-    non-replicated read path is :meth:`KVStore.read`; the linearizable one arrives with
-    ReadIndex in Phase 3.
+    history, which is what Phase 5's linearizability checker consumes. ``RaftNode``
+    never actually appends a ``Get`` to the log: Day 10 serves it straight from
+    :meth:`KVStore.read`, gated on a leader-lease check, once the applied index has
+    caught up to the commit index the read arrived at.
     """
 
     KIND: ClassVar[str] = "get"

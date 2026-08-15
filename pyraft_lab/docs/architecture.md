@@ -10,7 +10,7 @@ CLIENTS            put / get / delete / cas, leader discovery, retry with backof
    |
 RAFT CLUSTER       3-5 nodes, each with a log, a KV state machine and a WAL
    |
-TRANSPORT          InMemoryBus today; SimulatedNetwork (faults) from Day 8
+TRANSPORT          InMemoryBus (honest) or SimulatedNetwork (latency/loss/partitions)
    |
 EXPERIMENT LAYER   scenario runner, fault injector, metrics, analytics
 ```
@@ -146,7 +146,88 @@ which is precisely the anomaly Phase 5's linearizability checker exists to catch
 losing leadership the map is dropped and the client's timeout drives a retry, rather
 than the node answering for a term it no longer owns.
 
+### D8 — time is an injected `Clock`, not `asyncio`
+
+**Decision:** `RaftNode` and `SimulatedNetwork` both take a `Clock`. `WallClock` wraps
+the event loop's own time; `VirtualClock` only moves when a test calls `advance()`.
+
+**Why:** a deterministic network is the point of the project, and a network whose
+delays are measured against wall time is not deterministic no matter how well seeded
+its RNG is — the same run on a loaded machine interleaves differently. Making time an
+interface means Phase 7's replay can reconstruct a run exactly, and a test can assert
+"this message arrives at t=0.1 and not before" rather than polling and hoping.
+
+`Clock` carries `call_at` alongside `sleep_until` because the two callers need
+different things. A node's timer has a coroutine to suspend, so `sleep_until` suits it.
+A delayed *delivery* has no coroutine of its own — spawning a task per message just to
+hold a timer would mean a message is not registered as in-flight until the scheduler
+gets round to that task, so a `VirtualClock.advance()` immediately after a `send()`
+could miss it. `call_at` registers synchronously, inside `send` itself.
+
+### D8 — `_wait_for_message` keeps the `wait_for` fast path
+
+**Decision:** on a `WallClock`, the receive loop still uses `asyncio.wait_for` exactly
+as it did before Day 8. Only a `VirtualClock` takes the two-task race.
+
+**Why:** the general path costs two extra tasks per loop iteration, and the loop
+iterates every heartbeat — 12 ms in the test suite. That overhead was enough to shift
+scheduling under load and make a replication test flaky. The virtual clock cannot use
+`wait_for` (its timeout would be real seconds against virtual time), but the wall clock
+has no reason to pay for a mechanism it does not need.
+
+The race itself has one real obligation: whichever task loses, and the case where the
+whole call is cancelled mid-wait by `stop()`, must both leave no task still registered
+as a waiter on the inbox queue. An orphaned `recv_envelope` there is invisible and
+permanent — nothing will ever await it again.
+
+### D10 — reads are served under a leader lease, not ReadIndex
+
+**Decision:** a `Get` never enters the log. The leader answers it from its local
+`KVStore` once (a) a majority has acknowledged an AppendEntries in the current term
+within the last `election_timeout_min` seconds, and (b) `last_applied` has caught up to
+the `commit_index` that was current when the read arrived.
+
+**Why:** paper §8's ReadIndex wants the leader to confirm it still leads by exchanging a
+heartbeat round *for that read*. Doing that correctly needs the reply to identify which
+round it answers — and `AppendEntriesReply` deliberately carries only `term` and
+`success` (D4). Adding a tag would be a second departure from Figure 2's wire format, in
+the exact place where Day 8's simulator reordering makes a self-describing reply most
+dangerous.
+
+The lease gets the same guarantee from timing instead. A follower resets its election
+timer whenever it accepts an AppendEntries, and its next timeout is drawn from
+`[min, max]` — so within `min` seconds of an acknowledgement, that follower provably has
+not voted for anyone. A majority of such acknowledgements means no challenger can have
+won, so this node is still leader and its applied state is authoritative.
+
+The cost is an honest one, and worth naming: the lease trusts clocks not to drift
+between nodes. That is a real assumption a ReadIndex implementation would not need. In a
+simulation where every node reads the same `Clock` object it holds exactly; on real
+hardware it would need bounding.
+
+### D10 — a new leader commits a no-op immediately
+
+**Decision:** `_win_election` appends an entry with a `None` command before doing
+anything else.
+
+**Why:** §5.4.2 forbids a leader from committing an entry from an earlier term by
+counting replicas. A leader elected into a cluster whose last entries are all from
+older terms therefore cannot advance `commitIndex` at all until it gets a write of its
+own — even though Leader Completeness guarantees it already holds every committed
+entry. On a busy cluster the next client write hides this. On an idle one that only
+serves reads, `commit_index` would sit frozen behind the true committed state
+indefinitely, and D10's read index would hold reads that should have been servable.
+One no-op from the current term unfreezes the whole prefix the first time it commits.
+
+`KVStore._apply_one` already treats a `None` command as a harmless no-op, which is why
+this needed no state-machine change.
+
 ## Deferred
 
 - **InstallSnapshot.** Listed in the specification's RPC table but assigned no day, and
   genuinely out of scope for 15 days. Declared deferred rather than half-built.
+- **A leader that self-demotes without a quorum.** A partitioned leader keeps believing
+  it leads until it hears a higher term — correct per §5.1, and safe, since D10's lease
+  already stops it serving reads and the majority rule already stops it committing. A
+  step-down-on-lease-expiry rule would only change what `role` reports, so it is left
+  out rather than added for cosmetics.

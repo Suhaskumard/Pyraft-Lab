@@ -45,7 +45,10 @@ remain as historical record of the design intent behind each phase.
    the two documents. The original's `link.py` wins, since it's already referenced in
    `docs/architecture.md`'s decision log. 2.0's `faults.py` is added alongside it as a
    genuinely new file — fault *definitions* (`faults.py`) versus fault *application*
-   (`simulator.py`, using `link.py`) is a real split the original didn't have.
+   (`simulator.py`, using `link.py`) is a real split the original didn't have. Built
+   this way in Phase 3: `link.py` holds one link's characteristics and knows how to
+   sample them, `simulator.py` applies them to live traffic, `faults.py` names
+   composable fault descriptions that apply themselves to a simulator.
 
 ## Target directory structure
 
@@ -114,14 +117,28 @@ that is not in either source document's scope, and exactly-once client semantics
 among the Definition-of-Done items. Phase 5's linearizability checker will surface it if
 it ever bites.
 
-### Phase 3 — Failure Handling (Days 7–10)
+### Phase 3 — Failure Handling (Days 7–10) — done
 
-Day 7 failure detection/recovery — heartbeats and stale-leader step-down are already
-built into Day 3's `node.py`; this day is where that behavior gets exercised under real
-crash/rejoin scenarios. Day 8 `SimulatedNetwork` (latency, jitter, loss) plus a virtual
-clock — from here on, Day 3's real-time timers run against the deterministic clock
-instead of wall time. Day 9 partitions (minority rejection, majority progress, healing).
-Day 10 linearizable reads (ReadIndex or a leader lease).
+- **Day 7 — Failure detection & recovery** (done): heartbeats and stale-leader
+  step-down were already built into Day 3's `node.py`; this day exercises them under
+  hard crash/rejoin — a *replacement* `RaftNode` under the same id with no log, term or
+  vote, not just a clean stop — plus majority-loss unavailability and recovery.
+- **Day 8 — Simulated network & virtual clock** (done): `network/clock.py`
+  (`Clock` protocol, `WallClock`, `VirtualClock`), `network/link.py` (`LinkConfig`:
+  latency range + independent loss), `network/simulator.py` (`SimulatedNetwork`,
+  a drop-in `Transport`), `network/faults.py` (named, composable fault descriptions
+  ready for Phase 5's YAML timeline). `RaftNode` now takes an injected `Clock`.
+- **Day 9 — Partitions** (done): `SimulatedNetwork.partition`/`heal`, with groups
+  assigned per node and unlisted nodes reaching everyone. Verified end to end: a
+  minority makes no progress, the majority keeps committing, a minority leader may
+  append but never commit, and healing reconciles both sides without losing anything
+  the majority committed.
+- **Day 10 — Linearizable reads** (done): a leader lease rather than ReadIndex, plus a
+  no-op entry committed on election. See `docs/architecture.md` D10 for why the lease
+  won over ReadIndex, and what it costs.
+- Phase acceptance: reads never serve a value a newer leader has already replaced;
+  a partitioned leader refuses to answer rather than answering stale; the cluster is
+  unavailable-but-safe on majority loss and recovers when a quorum returns.
 
 ### Phase 4 — Observability Foundation (new — pulled forward from 2.0 item 4, plus the live half of item 2)
 

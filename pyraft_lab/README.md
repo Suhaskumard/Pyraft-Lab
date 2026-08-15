@@ -20,8 +20,8 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 0 — Foundation | **done** |
 | 1 — Raft core | **done** — state, log, RPCs, leader election, log replication |
 | 2 — KV & client | **done** — PUT/GET/DELETE/CAS state machine, leader-discovering client |
-| 3 — Failure handling | next |
-| 4 — Observability foundation | not started |
+| 3 — Failure handling | **done** — crash recovery, simulated network, partitions, linearizable reads |
+| 4 — Observability foundation | next |
 | 5 — Laboratory core | not started |
 | 6 — Persistence & snapshots | not started |
 | 7 — Deterministic replay | not started |
@@ -64,7 +64,8 @@ The cluster and experiment commands (`start`, `put`, `get`, `status`, `show-log`
 src/pyraft_lab/
   raft/           consensus: state, RPCs, election, replication, persistence
   kv/             replicated key-value state machine
-  network/        transports: the in-memory bus, later the fault simulator
+  network/        transports: the in-memory bus and the fault simulator, plus the
+                  virtual clock, link characteristics and fault definitions
   cluster/        cluster manager, config and lifecycle
   client/         leader-discovering client and workload generators
   experiments/    scenario runner, metrics, plots, stress and chaos campaigns

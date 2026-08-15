@@ -52,12 +52,13 @@ async def test_a_command_replicates_to_every_follower(bus: InMemoryBus) -> None:
 
     try:
         leader = leaders(nodes)[0]
-        leader.submit(put("a", 1))
-        assert await wait_until(lambda: all(n.state.log.last_index >= 1 for n in nodes))
+        base = leader.state.log.last_index  # the no-op election committed
+        index = leader.submit(put("a", 1))
+        assert await wait_until(lambda: all(n.state.log.last_index >= index for n in nodes))
 
         for node in nodes:
-            assert node.state.log.last_index >= 1
-            assert node.state.log.entry_at(1).command == put("a", 1)
+            assert node.state.log.last_index >= index
+            assert node.state.log.entry_at(base + 1).command == put("a", 1)
     finally:
         await shutdown(nodes)
 
@@ -80,23 +81,27 @@ async def test_a_command_commits_once_a_majority_holds_it(bus: InMemoryBus) -> N
 
 
 async def test_one_hundred_commands_replicate_consistently(bus: InMemoryBus) -> None:
-    """The plan's Phase 1 criterion, verbatim."""
+    """The plan's Phase 1 criterion, verbatim (relative to the no-op the winning
+    election already committed - see ``RaftNode._win_election``)."""
     nodes = build_cluster(bus, 3)
     await run_cluster(nodes)
 
     try:
         leader = leaders(nodes)[0]
+        base = leader.state.log.last_index
         for i in range(100):
             leader.submit(put(f"k{i}", i))
         # Followers learn the commit index one AppendEntries after receiving the
         # entries, so waiting on log length alone would race that second round.
-        assert await wait_until(lambda: all(n.state.commit_index == 100 for n in nodes))
+        assert await wait_until(lambda: all(n.state.commit_index == base + 100 for n in nodes))
 
-        assert leader.state.commit_index == 100
-        expected = [put(f"k{i}", i) for i in range(100)]
+        assert leader.state.commit_index == base + 100
+        expected = [leader.state.log.entry_at(i).command for i in range(1, base + 1)] + [
+            put(f"k{i}", i) for i in range(100)
+        ]
 
         for node in nodes:
-            assert node.state.log.last_index == 100
+            assert node.state.log.last_index == base + 100
             assert committed_commands(node) == expected
     finally:
         await shutdown(nodes)
@@ -109,9 +114,10 @@ async def test_every_node_agrees_entry_for_entry(bus: InMemoryBus) -> None:
 
     try:
         leader = leaders(nodes)[0]
+        base = leader.state.log.last_index  # the no-op election committed
         for i in range(30):
             leader.submit(put(f"k{i}", i))
-        assert await wait_until(lambda: all(n.state.log.last_index == 30 for n in nodes))
+        assert await wait_until(lambda: all(n.state.log.last_index == base + 30 for n in nodes))
 
         reference = leader.state.log
         for node in nodes:

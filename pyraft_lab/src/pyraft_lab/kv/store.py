@@ -54,8 +54,9 @@ class KVStore:
         """Read the local value directly.
 
         Not linearizable on its own: a stale leader can serve a value a newer leader has
-        already replaced. Phase 3's ReadIndex is what closes that gap; until then this is
-        for tests and for inspecting a specific replica's state.
+        already replaced. ``RaftNode``'s Day 10 leader-lease reads close that gap by
+        calling this only once the lease and the applied index both say it is safe; used
+        directly like this, it is for tests and for inspecting a specific replica's state.
         """
         return self._data.get(key)
 

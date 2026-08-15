@@ -5,8 +5,10 @@ delegated to the pure functions in ``rpc.py`` and ``election.py``; what lives he
 purely the *when* - when an election timer expires, when to heartbeat, what to do with
 each arriving message.
 
-Timing runs on the event loop's clock for now. Day 8 swaps that for the virtual clock
-without touching the decision logic, which is exactly why the two are separated.
+Timing runs against an injected ``Clock`` (Day 8): the real event loop clock by
+default, or a ``VirtualClock`` a test or the experiment runner drives by hand. Neither
+swap touches the decision logic in ``rpc.py``/``election.py``/``replication.py``,
+which is exactly why the two are separated.
 """
 
 from __future__ import annotations
@@ -17,15 +19,18 @@ import random
 
 from pyraft_lab import NodeId
 from pyraft_lab.client.client import ClientReply, ClientRequest
+from pyraft_lab.kv.commands import Get
 from pyraft_lab.kv.store import KVStore, Result
 from pyraft_lab.network.bus import Inbox, Transport
-from pyraft_lab.network.messages import Message
+from pyraft_lab.network.clock import Clock, WallClock
+from pyraft_lab.network.messages import Envelope, Message
 from pyraft_lab.raft.election import (
     ELECTION_TIMEOUT_RANGE,
     HEARTBEAT_INTERVAL,
     VoteTally,
     become_leader,
     begin_election,
+    majority,
     random_election_timeout,
 )
 from pyraft_lab.raft.replication import (
@@ -55,6 +60,7 @@ class RaftNode:
         transport: Transport,
         *,
         rng: random.Random | None = None,
+        clock: Clock | None = None,
         election_timeout_range: tuple[float, float] = ELECTION_TIMEOUT_RANGE,
         heartbeat_interval: float = HEARTBEAT_INTERVAL,
     ) -> None:
@@ -66,6 +72,9 @@ class RaftNode:
 
         # Seeded per node so a cluster's election order is reproducible from one seed.
         self._rng = rng if rng is not None else random.Random(hash(node_id) & 0xFFFF)
+        # WallClock by default (unchanged behaviour); a VirtualClock from Day 8 makes
+        # timing - and therefore a whole run - reproducible from a seed.
+        self._clock: Clock = clock if clock is not None else WallClock()
         self._election_timeout_range = election_timeout_range
         self._heartbeat_interval = heartbeat_interval
 
@@ -81,6 +90,14 @@ class RaftNode:
         # Log index -> the client waiting on it. A write is answered only once its entry
         # has committed and applied, never on being appended.
         self._pending: dict[int, tuple[NodeId, str]] = {}
+
+        # Reads pending a lease confirmation and/or commit-index catch-up (Day 10):
+        # (client, request_id, key, read_index).
+        self._pending_reads: list[tuple[NodeId, str, str, int]] = []
+
+        # Per-peer clock time of its last successful AppendEntries reply in the
+        # current term - the leader lease Day 10's reads are served against.
+        self._last_heartbeat_ack: dict[NodeId, float] = {}
 
     @property
     def cluster_size(self) -> int:
@@ -124,13 +141,11 @@ class RaftNode:
             if self.state.role is Role.LEADER:
                 # A leader never stands for election; it only needs to wake up often
                 # enough to heartbeat.
-                timeout = self._heartbeat_interval
-            else:
-                timeout = max(0.0, deadline - self._now())
+                deadline = self._now() + self._heartbeat_interval
 
-            try:
-                envelope = await asyncio.wait_for(self._inbox.recv_envelope(), timeout)
-            except TimeoutError:
+            envelope = await self._wait_for_message(deadline)
+
+            if envelope is None:
                 if self.state.role is Role.LEADER:
                     self._broadcast_heartbeat()
                 else:
@@ -145,15 +160,67 @@ class RaftNode:
             # leaderCommit, a leader derives it from matchIndex - so draining here covers
             # both without either handler having to remember to.
             self._apply_committed()
+            self._try_serve_reads()
 
-            if self._pending and self.state.role is not Role.LEADER:
+            if self.state.role is not Role.LEADER:
                 # We were deposed with requests outstanding. Their entries may still
                 # commit under the new leader, but answering is no longer ours to do:
                 # drop them and let the client's timeout drive a retry.
-                self._pending.clear()
+                if self._pending:
+                    self._pending.clear()
+                if self._pending_reads:
+                    self._pending_reads.clear()
 
     def _now(self) -> float:
-        return asyncio.get_running_loop().time()
+        return self._clock.now()
+
+    async def _wait_for_message(self, deadline: float) -> Envelope | None:
+        """Block until the next message arrives or ``deadline`` passes on our clock.
+
+        The common case - a ``WallClock`` - uses exactly the ``asyncio.wait_for`` this
+        used before Day 8: proven, and cheaper than the general path below (no extra
+        tasks per tick, which matters at a 12 ms test heartbeat interval). A
+        ``VirtualClock`` cannot use ``wait_for`` - its timeout would still be real time
+        - so it races the inbox against ``self._clock.sleep_until`` instead.
+        """
+        assert self._inbox is not None
+        if isinstance(self._clock, WallClock):
+            timeout = max(0.0, deadline - self._clock.now())
+            try:
+                return await asyncio.wait_for(self._inbox.recv_envelope(), timeout)
+            except TimeoutError:
+                return None
+        return await self._wait_for_message_or_virtual_deadline(deadline)
+
+    async def _wait_for_message_or_virtual_deadline(self, deadline: float) -> Envelope | None:
+        """The ``VirtualClock`` path of :meth:`_wait_for_message`.
+
+        Both branches - a winner and a loser - and the case where this call itself gets
+        cancelled (``RaftNode.stop()``, mid-wait) all have to leave neither task behind
+        registered as a waiter on the inbox's queue: an orphaned ``recv_envelope`` task
+        would sit there forever, invisible, since nothing will ever await it again.
+        """
+        assert self._inbox is not None
+        recv_task = asyncio.ensure_future(self._inbox.recv_envelope())
+        timeout_task = asyncio.ensure_future(self._clock.sleep_until(deadline))
+        tasks = (recv_task, timeout_task)
+
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+        for task in tasks:
+            if task not in done:
+                task.cancel()
+        await asyncio.gather(*(t for t in tasks if t not in done), return_exceptions=True)
+
+        if recv_task in done:
+            return recv_task.result()
+        return None
 
     def _next_election_deadline(self) -> float:
         return self._now() + random_election_timeout(self._rng, self._election_timeout_range)
@@ -221,6 +288,10 @@ class RaftNode:
         handle_append_reply(self.state, peer, reply, self._inflight.get(peer, 0))
 
         if reply.success:
+            # Proof of life for the lease (Day 10): this peer has just processed an
+            # AppendEntries from us in our current term, which - per the follower's
+            # own reset rule in ``_dispatch`` - reset its election timer.
+            self._last_heartbeat_ack[peer] = self._clock.now()
             # Still behind? Send the next batch straight away rather than waiting for
             # the heartbeat tick - this is what makes catch-up fast.
             if self.state.next_index.get(peer, 0) <= self.state.log.last_index:
@@ -267,7 +338,64 @@ class RaftNode:
             )
             return
 
+        if request.command.get("kind") == Get.KIND:
+            self._handle_read(src, request)
+            return
+
         self.submit(request.command, reply_to=(src, request.request_id))
+
+    # --- linearizable reads (Day 10) ----------------------------------------------
+    #
+    # A read never touches the log: ``KVStore.read`` is already local and instant, so
+    # the only thing standing between it and linearizability is proving this node is
+    # still the leader as of the read. Rather than paper §8's ReadIndex - which needs
+    # a round trip tagged well enough to survive reordering, and Figure 2's
+    # AppendEntriesReply deliberately carries nothing to tag it with (see
+    # docs/architecture.md D4) - a read is instead served once a majority of peers
+    # have acknowledged an AppendEntries in this term within the last
+    # ``election_timeout_range[0]`` seconds: since a follower's own randomly chosen
+    # timeout is never shorter than that minimum, nobody could have voted for a
+    # challenger since. ``_win_election``'s no-op commit closes the other half of the
+    # gap: it is what lets ``commit_index`` (and so ``read_index``) catch up to the
+    # true committed state after a failover, rather than sitting frozen at whatever a
+    # since-deposed leader last advertised.
+
+    def _handle_read(self, src: NodeId, request: ClientRequest) -> None:
+        key = request.command["key"]
+        self._pending_reads.append((src, request.request_id, key, self.state.commit_index))
+        self._try_serve_reads()
+
+    def _try_serve_reads(self) -> None:
+        if not self._pending_reads or not self._has_lease():
+            return
+
+        still_pending: list[tuple[NodeId, str, str, int]] = []
+        for client, request_id, key, read_index in self._pending_reads:
+            if self.state.last_applied >= read_index:
+                self._send(
+                    client,
+                    ClientReply(
+                        request_id=request_id, ok=key in self.store, value=self.store.read(key)
+                    ),
+                )
+            else:
+                still_pending.append((client, request_id, key, read_index))
+        self._pending_reads = still_pending
+
+    def _has_lease(self) -> bool:
+        """Is a majority of the cluster still within the window paper §5.2 guarantees
+        they cannot yet have voted for a challenger in?
+        """
+        if self.state.role is not Role.LEADER:
+            return False
+        now = self._clock.now()
+        lease = self._election_timeout_range[0]
+        live = 1 + sum(
+            1
+            for peer in self.peers
+            if now - self._last_heartbeat_ack.get(peer, float("-inf")) <= lease
+        )
+        return live >= majority(self.cluster_size)
 
     def _apply_committed(self) -> list[Result]:
         """Hand every newly committed entry to the state machine, in order."""
@@ -301,6 +429,20 @@ class RaftNode:
         self.leader_id = self.node_id
         self._tally = None
         self._inflight.clear()
+        self._last_heartbeat_ack.clear()
+
+        # A no-op entry in the new term (paper §8). Without it, commit_index can sit
+        # frozen at whatever this node knew as a follower: advance_commit_index's
+        # current-term restriction (§5.4.2) blocks it from counting a majority on an
+        # *older*-term entry no matter how many peers already match it, even though
+        # Leader Completeness guarantees this log already holds it. One entry from our
+        # own term unfreezes all of that in a single jump the next time it commits -
+        # which matters most exactly when nothing else would ever commit: an idle
+        # cluster whose new leader is only ever asked to serve reads.
+        append_command(self.state, None)
+        advance_commit_index(self.state, self.cluster_size)
+        self._apply_committed()
+
         self._broadcast_heartbeat()
 
     def _broadcast_heartbeat(self) -> None:
