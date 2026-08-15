@@ -12,12 +12,12 @@ debug noise - which is why redirects are tracked separately from failures.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from pyraft_lab import NodeId
 from pyraft_lab.kv.commands import Cas, Command, Delete, Get, Put
+from pyraft_lab.network.clock import Clock, WallClock, race_deadline
 from pyraft_lab.network.messages import Message
 
 
@@ -118,11 +118,17 @@ class KVClient:
         submit: Any,
         *,
         policy: RetryPolicy | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self.client_id = client_id
         self.members = list(members)
         self._submit = submit
         self.policy = policy or RetryPolicy()
+        # The same clock the cluster runs on. Under a VirtualClock a client's backoff
+        # and its measured latencies are in the run's own time, which is what lets an
+        # experiment compress 30 simulated seconds into milliseconds and still report
+        # latencies that mean something.
+        self._clock: Clock = clock if clock is not None else WallClock()
         self.metrics = ClientMetrics()
         self.leader_hint: NodeId | None = None
         self._next_request = 0
@@ -130,22 +136,31 @@ class KVClient:
     # --- the four operations ------------------------------------------------------
 
     async def put(self, key: str, value: Any) -> Any:
-        return await self._call(Put(key=key, value=value))
+        return (await self._call(Put(key=key, value=value))).value
 
     async def get(self, key: str) -> Any:
-        return await self._call(Get(key=key))
+        return (await self._call(Get(key=key))).value
+
+    async def read(self, key: str) -> tuple[Any, bool]:
+        """The value *and* whether the key was there at all.
+
+        ``get`` cannot answer the second question: a key holding ``None`` and a key that
+        does not exist both come back as ``None``. Phase 5's history recorder needs the
+        difference, because a checker that cannot see it would pass a history in which a
+        delete quietly never happened.
+        """
+        reply = await self._call(Get(key=key))
+        return reply.value, reply.ok
 
     async def delete(self, key: str) -> bool:
-        result = await self._call(Delete(key=key), want_value=False)
-        return bool(result)
+        return bool((await self._call(Delete(key=key))).ok)
 
     async def cas(self, key: str, expected: Any, new: Any) -> bool:
-        result = await self._call(Cas(key=key, expected=expected, new=new), want_value=False)
-        return bool(result)
+        return bool((await self._call(Cas(key=key, expected=expected, new=new))).ok)
 
     # --- the retry loop -----------------------------------------------------------
 
-    async def _call(self, command: Command, *, want_value: bool = True) -> Any:
+    async def _call(self, command: Command) -> ClientReply:
         request_id = f"{self.client_id}-{self._next_request}"
         self._next_request += 1
 
@@ -153,16 +168,17 @@ class KVClient:
 
         for attempt in range(self.policy.max_attempts):
             if attempt:
-                await asyncio.sleep(self.policy.backoff_for(attempt - 1))
+                backoff = self.policy.backoff_for(attempt - 1)
+                await self._clock.sleep_until(self._clock.now() + backoff)
 
             target = self._pick_target(attempt)
             self.metrics.attempts += 1
 
-            started = asyncio.get_running_loop().time()
+            started = self._clock.now()
             reply = await self._submit(
                 target, ClientRequest(request_id=request_id, command=command.to_wire())
             )
-            elapsed = asyncio.get_running_loop().time() - started
+            elapsed = self._clock.now() - started
 
             if reply is None:
                 # No answer at all: a crashed or unreachable node. Try someone else.
@@ -185,7 +201,7 @@ class KVClient:
             self.leader_hint = target
             self.metrics.successes += 1
             self.metrics.latencies.append(elapsed)
-            return reply.value if want_value else reply.ok
+            return reply
 
         self.metrics.failures += 1
         raise RequestFailed(
@@ -215,30 +231,36 @@ class BusChannel:
     client already gave up on must be discarded, not mistaken for the current answer.
     """
 
-    def __init__(self, transport: Any, client_id: NodeId, *, timeout: float = 0.2) -> None:
+    def __init__(
+        self,
+        transport: Any,
+        client_id: NodeId,
+        *,
+        timeout: float = 0.2,
+        clock: Clock | None = None,
+    ) -> None:
         self.transport = transport
         self.client_id = client_id
         self.timeout = timeout
+        self._clock: Clock = clock if clock is not None else WallClock()
         self.inbox = transport.register(client_id)
 
     def close(self) -> None:
-        self.transport.unregister(self.client_id)
+        # Not a crash: a client leaving is not a cluster member going down, and a
+        # transport that narrates departures would otherwise record a fault that never
+        # happened at the end of every run.
+        self.transport.unregister(self.client_id, crashed=False)
 
     async def __call__(self, target: NodeId, request: ClientRequest) -> ClientReply | None:
         self.transport.send(self.client_id, target, request)
-
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.timeout
+        deadline = self._clock.now() + self.timeout
 
         while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return None
-            try:
-                _, message = await asyncio.wait_for(self.inbox.recv(), remaining)
-            except TimeoutError:
+            received = await race_deadline(self._clock, self.inbox.recv(), deadline)
+            if received is None:
                 return None
 
+            _, message = received
             if isinstance(message, ClientReply) and message.request_id == request.request_id:
                 return message
             # Anything else is a straggler from an abandoned attempt: drop it.

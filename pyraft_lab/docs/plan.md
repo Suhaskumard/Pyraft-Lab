@@ -140,14 +140,28 @@ it ever bites.
   a partitioned leader refuses to answer rather than answering stale; the cluster is
   unavailable-but-safe on majority loss and recovers when a quorum returns.
 
-### Phase 4 — Observability Foundation (new — pulled forward from 2.0 item 4, plus the live half of item 2)
+### Phase 4 — Observability Foundation (new — pulled forward from 2.0 item 4, plus the live half of item 2) — done
 
 Pulled ahead of the laboratory phase because Phase 7 (replay), Phase 8 (stress/chaos
 reports), and Phase 11 (dashboard) all consume an event trace that has to already exist.
-`observability/events.py` — the event vocabulary (`ELECTION_STARTED` …
-`TERM_CHANGED`, matching 2.0 item 4's list) — plus `tracer.py` (a recorder every
-`RaftNode` and the network simulator write to) and `observability/metrics.py` (live
-counters). No dashboard yet — that's Phase 11.
+
+- `observability/events.py` (done): `EventKind` — exactly 2.0 item 4's twelve kinds,
+  fixed and not extended; anything finer-grained goes in an event's `details`. `Event`
+  is frozen and carries `(timestamp, seq, node, term, details)`, serializing to the
+  specification's JSON shape, with JSONL read/write for Phase 5 and Phase 7.
+- `observability/tracer.py` (done): one `Tracer` per run, shared by every node and the
+  network, stamping events from the same injected `Clock` the timers run against — so a
+  trace taken under a `VirtualClock` is as reproducible as the run. Live `subscribe`,
+  plus `of_kind`/`for_node`/`in_term`/`first`/`last` for reading a finished run.
+  Recording is opt-in: `NULL_TRACER` drops an event before touching a clock.
+- `observability/metrics.py` (done): `LiveMetrics`, a running fold of the stream —
+  term, leader, per-node commit index, who is down, partition state, vote and append
+  counts, election durations, and a one-word cluster `status`. Derived from events
+  alone, never from a `RaftNode`. Post-hoc percentiles remain Phase 5's job.
+- Instrumented: `RaftNode` emits the eight node-level kinds, `SimulatedNetwork` the four
+  it alone can observe. See `docs/architecture.md` P4 for why the split falls there,
+  and why the pure modules stay untouched.
+- No dashboard yet — that's Phase 11, which reads `LiveMetrics.snapshot()`.
 
 ### Phase 5 — Laboratory Core (Days 11–13, plus 2.0 items 6 and 8)
 

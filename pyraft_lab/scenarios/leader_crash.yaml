@@ -1,0 +1,25 @@
+# Failover and recovery. Written in the original document's flat form on purpose - a
+# fault with a `duration:` is parsed into a crash step and a matching recover step, and
+# the recover puts back the node the crash took down rather than whoever leads by then.
+name: leader_crash
+duration: 30s
+nodes: 3
+seed: 2
+
+faults:
+  - type: node_crash
+    target: leader
+    start: 10s
+    duration: 5s
+
+workload:
+  type: put_get_mix
+  puts_per_sec: 10
+  get_ratio: 0.5
+  keys: 4
+  clients: 2
+
+expected:
+  data_loss: false
+  linearizable: true
+  recovery_time_ms: "<3000"

@@ -12,8 +12,10 @@ from __future__ import annotations
 import asyncio
 import heapq
 import itertools
-from collections.abc import Callable
-from typing import Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable
+from typing import Protocol, TypeVar, runtime_checkable
+
+T = TypeVar("T")
 
 
 @runtime_checkable
@@ -106,3 +108,59 @@ class VirtualClock:
     def pending(self) -> int:
         """How many timers are still waiting for a future ``advance``."""
         return len(self._pending)
+
+    def next_deadline(self) -> float | None:
+        """When the earliest waiting timer is due, or ``None`` if nothing is waiting.
+
+        What lets a driver jump straight to the next thing that happens instead of
+        ticking through the gap. Empty simulated time then costs nothing, which is the
+        difference between a 30-second scenario taking milliseconds and taking 6000
+        pointless steps.
+        """
+        return self._pending[0][0] if self._pending else None
+
+
+async def race_deadline(clock: Clock, awaitable: Awaitable[T], deadline: float) -> T | None:
+    """Await ``awaitable``, abandoning it if ``deadline`` passes on ``clock``.
+
+    Returns what it produced, or ``None`` if the deadline won. Every timeout in the
+    system that has to work on both clocks goes through here - a node waiting for a
+    message, a client waiting for a reply - because the two clocks need genuinely
+    different mechanisms and neither caller should have to know that.
+
+    The wall-clock path is plain ``asyncio.wait_for``: proven, and cheaper than the
+    general path below, which costs two extra tasks per call. That matters where this
+    is called every heartbeat - 12 ms in the test suite - and the overhead was once
+    enough to shift scheduling under load and make a replication test flaky.
+
+    A ``VirtualClock`` cannot use ``wait_for`` at all, since its timeout would be
+    counted in real seconds against virtual time. It races the work against
+    ``sleep_until`` instead, which brings one obligation: both branches - and the case
+    where this call is itself cancelled mid-wait - must leave neither task behind as a
+    waiter on a queue. An orphaned receive is invisible and permanent, because nothing
+    will ever await it again.
+    """
+    if isinstance(clock, WallClock):
+        try:
+            return await asyncio.wait_for(awaitable, max(0.0, deadline - clock.now()))
+        except TimeoutError:
+            return None
+
+    work = asyncio.ensure_future(awaitable)
+    timeout: asyncio.Future[None] = asyncio.ensure_future(clock.sleep_until(deadline))
+    tasks: tuple[asyncio.Future[object], ...] = (work, timeout)
+
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+    for task in tasks:
+        if task not in done:
+            task.cancel()
+    await asyncio.gather(*(t for t in tasks if t not in done), return_exceptions=True)
+
+    return work.result() if work in done else None

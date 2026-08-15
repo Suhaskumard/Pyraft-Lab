@@ -21,8 +21,8 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 1 — Raft core | **done** — state, log, RPCs, leader election, log replication |
 | 2 — KV & client | **done** — PUT/GET/DELETE/CAS state machine, leader-discovering client |
 | 3 — Failure handling | **done** — crash recovery, simulated network, partitions, linearizable reads |
-| 4 — Observability foundation | next |
-| 5 — Laboratory core | not started |
+| 4 — Observability foundation | **done** — event vocabulary, run tracer, live metrics |
+| 5 — Laboratory core | next |
 | 6 — Persistence & snapshots | not started |
 | 7 — Deterministic replay | not started |
 | 8 — Stress & chaos | not started |
@@ -57,6 +57,22 @@ pyraft-lab kinds      # message kinds this build can put on the wire
 
 The cluster and experiment commands (`start`, `put`, `get`, `status`, `show-log`,
 `run --scenario ...`, `results`) arrive with their phases.
+
+## Tracing a run
+
+Recording is opt-in — a node built without a tracer records nothing. Hand one to the
+nodes and the network and the run narrates itself:
+
+```python
+tracer = Tracer()                      # or Tracer(clock) to share a VirtualClock
+metrics = LiveMetrics(tracer)          # a running fold, readable at any moment
+net = SimulatedNetwork(tracer=tracer)  # partitions and node loss
+node = RaftNode("n1", ids, net, tracer=tracer)
+...
+metrics.snapshot()                     # term, leader, status, commit indexes, timings
+tracer.write_jsonl("results/run.jsonl")
+print(tracer.story())                  # the same trace, one line per event
+```
 
 ## Layout
 

@@ -1,0 +1,24 @@
+# Quorum rejection: two nodes are cut off from the other three. The minority cannot
+# commit anything - no majority to acknowledge it - while the majority carries on, and
+# healing must reconcile the two without losing a thing.
+name: minority_partition
+duration: 30s
+nodes: 5
+seed: 3
+
+faults:
+  - type: partition
+    groups: [[1, 2], [3, 4, 5]]
+    start: 5s
+    duration: 15s
+
+workload:
+  type: put_get_mix
+  puts_per_sec: 10
+  get_ratio: 0.5
+  keys: 4
+  clients: 2
+
+expected:
+  data_loss: false
+  linearizable: true

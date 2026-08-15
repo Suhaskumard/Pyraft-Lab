@@ -92,7 +92,7 @@ class Transport(Protocol):
 
     def register(self, node_id: NodeId) -> Inbox: ...
 
-    def unregister(self, node_id: NodeId) -> None: ...
+    def unregister(self, node_id: NodeId, *, crashed: bool = True) -> None: ...
 
     def send(self, src: NodeId, dst: NodeId, message: Message) -> None: ...
 
@@ -120,8 +120,12 @@ class InMemoryBus:
         self._seq.setdefault(node_id, 0)
         return inbox
 
-    def unregister(self, node_id: NodeId) -> None:
-        """Detach a node. Messages addressed to it are dropped from now on."""
+    def unregister(self, node_id: NodeId, *, crashed: bool = True) -> None:
+        """Detach a node. Messages addressed to it are dropped from now on.
+
+        ``crashed`` exists for the transports that narrate departures - see
+        ``SimulatedNetwork.unregister``. This bus records nothing, so it ignores it.
+        """
         if self._inboxes.pop(node_id, None) is None:
             raise UnknownNode(f"{node_id!r} is not registered")
 

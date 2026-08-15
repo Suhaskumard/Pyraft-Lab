@@ -230,17 +230,13 @@ async def test_healing_reconciles_the_minority_with_the_majority(
         new_leader = leaders(majority_side)[0]
         for i in range(5):
             new_leader.submit(put(f"real{i}", i))
-        assert await wait_until(
-            lambda: all(n.state.commit_index >= 5 for n in majority_side)
-        )
+        assert await wait_until(lambda: all(n.state.commit_index >= 5 for n in majority_side))
         committed_by_majority = committed_commands(new_leader)
 
         net.heal()
 
         assert await wait_until(
-            lambda: all(
-                n.state.commit_index == new_leader.state.commit_index for n in nodes
-            ),
+            lambda: all(n.state.commit_index == new_leader.state.commit_index for n in nodes),
             timeout=3.0,
         )
         for node in nodes:

@@ -1,0 +1,26 @@
+# Majority availability and election. The leader is isolated on its own - `leader` in a
+# partition group is resolved when the split happens, since which node leads is decided
+# by the run and not by this file. The four survivors hold a majority, so they must
+# elect a new leader and keep serving; the old leader must not commit anything alone.
+name: majority_partition
+duration: 30s
+nodes: 5
+seed: 4
+
+faults:
+  - at: 8s
+    action: partition
+    groups: [[leader], [1, 2, 3, 4, 5]]
+  - at: 20s
+    action: heal_partition
+
+workload:
+  type: put_get_mix
+  puts_per_sec: 10
+  get_ratio: 0.5
+  keys: 4
+  clients: 2
+
+expected:
+  data_loss: false
+  linearizable: true

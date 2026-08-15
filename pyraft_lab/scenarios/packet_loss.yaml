@@ -1,0 +1,23 @@
+# Handling lossy links: one message in ten is dropped, in both directions, for the whole
+# run. Nothing is retransmitted at the transport level - Raft's own retries are the only
+# recovery mechanism, which is the point of the test.
+name: packet_loss
+duration: 30s
+nodes: 5
+seed: 6
+
+faults:
+  - at: 2s
+    action: packet_loss
+    rate: 0.10
+
+workload:
+  type: put_get_mix
+  puts_per_sec: 10
+  get_ratio: 0.5
+  keys: 4
+  clients: 2
+
+expected:
+  data_loss: false
+  linearizable: true

@@ -1,0 +1,40 @@
+# Repeated node restarts. A chained timeline in the 2.0 form: nodes come and go one at a
+# time, never enough at once to lose quorum, so the cluster should stay available
+# throughout while leadership moves around under it.
+name: churn
+duration: 30s
+nodes: 5
+seed: 7
+
+faults:
+  - at: 5s
+    action: crash
+    target: leader
+  - at: 8s
+    action: recover
+  - at: 12s
+    action: crash
+    target: 3
+  - at: 16s
+    action: recover
+  - at: 19s
+    action: crash
+    target: leader
+  - at: 23s
+    action: recover
+  - at: 26s
+    action: crash
+    target: 5
+  - at: 28s
+    action: recover
+
+workload:
+  type: put_get_mix
+  puts_per_sec: 10
+  get_ratio: 0.5
+  keys: 4
+  clients: 2
+
+expected:
+  data_loss: false
+  linearizable: true

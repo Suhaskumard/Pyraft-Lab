@@ -21,6 +21,9 @@ network dropping 30 % of them.
 
 ## Decisions
 
+Labels are the day the decision was made — `D8` is Day 8. Phases the 2.0 upgrade added
+have no day of their own, so their decisions are labelled by phase instead: `P4`.
+
 ### D1 — asyncio streams over gRPC
 
 **Decision:** plain asyncio and an in-process message bus. No gRPC, no protobuf.
@@ -221,6 +224,85 @@ One no-op from the current term unfreezes the whole prefix the first time it com
 
 `KVStore._apply_one` already treats a `None` command as a harmless no-op, which is why
 this needed no state-machine change.
+
+### P4 — instrumentation reports, it never decides
+
+**Decision:** the tracer is injected into `RaftNode` and `SimulatedNetwork` only. The
+pure modules — `election.py`, `rpc.py`, `replication.py` — never learn that it exists,
+and every event is emitted by the driver that already owned the *when*.
+
+**Why:** D2 made the receiver rules pure so they could be tested without an event loop.
+Threading a tracer through them would undo exactly that, and worse: a decision function
+holding a recorder is a decision function that can be changed by recording. Emitting
+from `node.py` costs nothing in fidelity, since the driver observes every state change
+the pure functions make, and it keeps the property that turning tracing on cannot alter
+what the algorithm does — the one property a debugging tool must not cost you.
+
+The same reasoning makes recording opt-in. A node built without a tracer gets
+`NULL_TRACER`, which drops an event before reading a clock, so the 250 tests that
+predate this phase pay nothing for it rather than paying a little.
+
+**Consequence:** two values move inside pure functions that then have nobody to report
+them — the term (`RaftState.observe_term`, D2) and `commitIndex` (both ends of
+replication, D4). Rather than have every call site remember to announce them, `node.py`
+watches them: `_check_term_change` and `_check_commit_advance` compare against what was
+last traced and emit only on a change. `_trace` runs the term check first, so a message
+that both raised the term and produced an event yields `TERM_CHANGED` before that event
+rather than a trace in which a node answers an RPC from a term it had not yet reached.
+
+### P4 — the trace is one ordered record, not per-node logs
+
+**Decision:** one `Tracer` per run, shared by every node and by the network. Events
+carry `(timestamp, seq)` and are ordered by both.
+
+**Why:** the view that cannot explain a distributed failure is a single node's — the
+interesting question is always what someone else was doing at the same moment. Merging
+per-node files afterwards would mean reconstructing an order that was known for free at
+write time.
+
+`seq` is not decoration. Under a `VirtualClock` time only moves when the run advances
+it, so a burst of events all share one timestamp; a replay that reorders two
+same-instant events is not a replay. The tracer's own monotonic counter is what makes
+the order total, and it keeps counting across `clear()` so events either side of one
+remain comparable.
+
+### P4 — the network narrates what a node cannot, and the follower narrates why
+
+**Decision:** `NODE_CRASHED`, `NODE_RECOVERED`, `PARTITION_CREATED` and
+`PARTITION_HEALED` are emitted by `SimulatedNetwork` and carry no term.
+`APPEND_ENTRIES_REJECTED` is emitted by the *follower* that rejected, not the leader
+that saw the rejection.
+
+**Why:** a process that has crashed cannot write down that it crashed, and a partition
+belongs to no single node. From outside, a clean `stop()` and a crash are the same
+observation — precisely as `send` cannot distinguish a crashed peer from a slow one —
+so the network is the honest narrator, and it genuinely does not know what term anyone
+was in. A first registration is a join, not a recovery; only a node the network has
+seen before produces `NODE_RECOVERED`.
+
+The rejection is the mirror image. *Why* a follower rejected — stale term or log
+mismatch — exists only on the follower: Figure 2's reply carries `term` and `success`
+and nothing else, and D4 keeps it that way deliberately. Recording at the leader would
+lose the reason permanently. The leader's half of the exchange is not lost by this: its
+`nextIndex` walking back is already visible as the next `APPEND_ENTRIES_SENT` to that
+peer with a lower `prevLogIndex`.
+
+### P4 — live counters and post-hoc metrics are different modules
+
+**Decision:** `observability/metrics.py` holds `LiveMetrics`, a running fold of the
+event stream. Percentiles, replication lag and per-scenario summaries stay in
+`experiments/metrics.py` (Phase 5). `LiveMetrics` reads nothing but events — never a
+`RaftNode`'s state.
+
+**Why:** plan.md's conflict 3 resolved that these are two different things; this is the
+line that keeps them from merging back. A dashboard needs a value that is correct *now*
+and cheap to update per event; a report needs a distribution over a finished run and can
+afford to re-read the whole trace. Building one thing that does both would make the
+dashboard pay for percentile maintenance at every heartbeat.
+
+Deriving it purely from events costs a little duplication and buys the property that
+matters: a metric cannot look right while the trace is wrong. If the fold shows the
+wrong leader, the trace is wrong — and the trace is what Phase 7 will replay from.
 
 ## Deferred
 

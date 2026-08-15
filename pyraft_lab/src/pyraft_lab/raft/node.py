@@ -22,8 +22,10 @@ from pyraft_lab.client.client import ClientReply, ClientRequest
 from pyraft_lab.kv.commands import Get
 from pyraft_lab.kv.store import KVStore, Result
 from pyraft_lab.network.bus import Inbox, Transport
-from pyraft_lab.network.clock import Clock, WallClock
+from pyraft_lab.network.clock import Clock, WallClock, race_deadline
 from pyraft_lab.network.messages import Envelope, Message
+from pyraft_lab.observability.events import EventKind
+from pyraft_lab.observability.tracer import NULL_TRACER, Tracer
 from pyraft_lab.raft.election import (
     ELECTION_TIMEOUT_RANGE,
     HEARTBEAT_INTERVAL,
@@ -61,6 +63,7 @@ class RaftNode:
         *,
         rng: random.Random | None = None,
         clock: Clock | None = None,
+        tracer: Tracer | None = None,
         election_timeout_range: tuple[float, float] = ELECTION_TIMEOUT_RANGE,
         heartbeat_interval: float = HEARTBEAT_INTERVAL,
     ) -> None:
@@ -75,6 +78,10 @@ class RaftNode:
         # WallClock by default (unchanged behaviour); a VirtualClock from Day 8 makes
         # timing - and therefore a whole run - reproducible from a seed.
         self._clock: Clock = clock if clock is not None else WallClock()
+        # Phase 4. Timestamps come off the same clock as the timers above, so an event's
+        # time and the deadline that produced it are the same reading - a trace taken
+        # against a VirtualClock is therefore exactly as reproducible as the run itself.
+        self._tracer = tracer if tracer is not None else NULL_TRACER
         self._election_timeout_range = election_timeout_range
         self._heartbeat_interval = heartbeat_interval
 
@@ -99,6 +106,12 @@ class RaftNode:
         # current term - the leader lease Day 10's reads are served against.
         self._last_heartbeat_ack: dict[NodeId, float] = {}
 
+        # Last values the tracer was told about. Term and commit index both move inside
+        # pure functions that have no tracer and should not grow one, so the node
+        # watches them instead of asking every call site to remember to report.
+        self._traced_term = self.state.current_term
+        self._traced_commit = self.state.commit_index
+
     @property
     def cluster_size(self) -> int:
         return len(self.peers) + 1
@@ -120,15 +133,22 @@ class RaftNode:
         self._inbox = self.transport.register(self.node_id)
         self._task = asyncio.create_task(self._run(), name=f"raft-{self.node_id}")
 
-    async def stop(self) -> None:
-        """Stop the loop and leave the transport. Models a clean shutdown, not a crash."""
+    async def stop(self, *, crashed: bool = True) -> None:
+        """Stop the loop and leave the transport.
+
+        The default is to have the departure recorded as a crash, because that is what
+        stopping a node means in an experiment - and from the network's side a clean
+        stop and a crash are indistinguishable anyway (P4). ``crashed=False`` is for
+        tearing a cluster down at the end of a run, where a crash event would put a
+        fault in the trace that was really just the experiment ending.
+        """
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
         if self._inbox is not None:
-            self.transport.unregister(self.node_id)
+            self.transport.unregister(self.node_id, crashed=crashed)
             self._inbox = None
 
     # --- the loop ----------------------------------------------------------------
@@ -153,7 +173,13 @@ class RaftNode:
                     deadline = self._next_election_deadline()
                 continue
 
-            if self._dispatch(envelope.src, envelope.body):
+            reset_timer = self._dispatch(envelope.src, envelope.body)
+            # Catches a step-down that produced no event of its own - a *reply* carrying
+            # a higher term. Every other path reports through ``_trace``, which checks
+            # the term itself before emitting.
+            self._check_term_change()
+
+            if reset_timer:
                 deadline = self._next_election_deadline()
 
             # Both sides of replication can move commitIndex - a follower learns it from
@@ -177,53 +203,68 @@ class RaftNode:
     async def _wait_for_message(self, deadline: float) -> Envelope | None:
         """Block until the next message arrives or ``deadline`` passes on our clock.
 
-        The common case - a ``WallClock`` - uses exactly the ``asyncio.wait_for`` this
-        used before Day 8: proven, and cheaper than the general path below (no extra
-        tasks per tick, which matters at a 12 ms test heartbeat interval). A
-        ``VirtualClock`` cannot use ``wait_for`` - its timeout would still be real time
-        - so it races the inbox against ``self._clock.sleep_until`` instead.
+        Both clocks are handled by ``race_deadline`` (see it for why they need
+        different mechanisms); this node's only job is to say what it is waiting for.
         """
         assert self._inbox is not None
-        if isinstance(self._clock, WallClock):
-            timeout = max(0.0, deadline - self._clock.now())
-            try:
-                return await asyncio.wait_for(self._inbox.recv_envelope(), timeout)
-            except TimeoutError:
-                return None
-        return await self._wait_for_message_or_virtual_deadline(deadline)
-
-    async def _wait_for_message_or_virtual_deadline(self, deadline: float) -> Envelope | None:
-        """The ``VirtualClock`` path of :meth:`_wait_for_message`.
-
-        Both branches - a winner and a loser - and the case where this call itself gets
-        cancelled (``RaftNode.stop()``, mid-wait) all have to leave neither task behind
-        registered as a waiter on the inbox's queue: an orphaned ``recv_envelope`` task
-        would sit there forever, invisible, since nothing will ever await it again.
-        """
-        assert self._inbox is not None
-        recv_task = asyncio.ensure_future(self._inbox.recv_envelope())
-        timeout_task = asyncio.ensure_future(self._clock.sleep_until(deadline))
-        tasks = (recv_task, timeout_task)
-
-        try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        except asyncio.CancelledError:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-
-        for task in tasks:
-            if task not in done:
-                task.cancel()
-        await asyncio.gather(*(t for t in tasks if t not in done), return_exceptions=True)
-
-        if recv_task in done:
-            return recv_task.result()
-        return None
+        return await race_deadline(self._clock, self._inbox.recv_envelope(), deadline)
 
     def _next_election_deadline(self) -> float:
         return self._now() + random_election_timeout(self._rng, self._election_timeout_range)
+
+    # --- tracing (Phase 4) -------------------------------------------------------
+    #
+    # Nothing below changes a decision; it only reports one. The pure modules stay
+    # pure - ``election.py``, ``rpc.py`` and ``replication.py`` never learn that a
+    # tracer exists - so instrumentation cannot alter what the algorithm does, which
+    # is the one property a debugging tool must not cost you.
+
+    def _trace(self, kind: EventKind, **details: object) -> None:
+        """Record an event attributed to this node, in its current term.
+
+        Checks the term first so that a message which both raised our term and
+        produced an event yields TERM_CHANGED *before* that event, rather than a trace
+        that appears to answer an RPC from a term it had not reached yet.
+        """
+        self._check_term_change()
+        self._tracer.emit(kind, node=self.node_id, term=self.state.current_term, **details)
+
+    def _check_term_change(self) -> None:
+        """Emit TERM_CHANGED if the term moved since we last looked.
+
+        A watcher rather than a call at each site: ``RaftState.observe_term`` is
+        already the single funnel every term increase goes through (D2), and it is a
+        pure function that would have to be handed a tracer to report for itself.
+        Emitting directly - not through ``_trace`` - is what keeps this from recursing.
+        """
+        if self.state.current_term == self._traced_term:
+            return
+        previous, self._traced_term = self._traced_term, self.state.current_term
+        self._tracer.emit(
+            EventKind.TERM_CHANGED,
+            node=self.node_id,
+            term=self.state.current_term,
+            previous_term=previous,
+            role=self.state.role.value,
+        )
+
+    def _check_commit_advance(self) -> None:
+        """Emit LOG_COMMITTED if commitIndex moved.
+
+        Both ends of replication move it - a follower from ``leaderCommit``, a leader
+        from ``matchIndex`` - so watching the value covers both without either path
+        having to remember to report. Called from ``_apply_committed``, which every
+        path that can advance it already routes through.
+        """
+        if self.state.commit_index == self._traced_commit:
+            return
+        previous, self._traced_commit = self._traced_commit, self.state.commit_index
+        self._trace(
+            EventKind.LOG_COMMITTED,
+            **{"from": previous},
+            to=self.state.commit_index,
+            entries=self.state.commit_index - previous,
+        )
 
     # --- message handling --------------------------------------------------------
 
@@ -239,6 +280,13 @@ class RaftNode:
             case RequestVote():
                 reply = handle_request_vote(self.state, message)
                 self._send(src, reply)
+                if reply.vote_granted:
+                    self._trace(
+                        EventKind.VOTE_GRANTED,
+                        candidate=message.candidate_id,
+                        last_log_index=message.last_log_index,
+                        last_log_term=message.last_log_term,
+                    )
                 return reply.vote_granted
 
             case AppendEntries():
@@ -247,6 +295,21 @@ class RaftNode:
                 if reply.success:
                     self.leader_id = message.leader_id
                     self._tally = None  # a leader exists; our campaign is over
+                else:
+                    # Recorded here, on the follower, rather than on the leader that
+                    # sees the rejection: *why* it rejected is knowable only here.
+                    # Figure 2's reply carries term and success and nothing else, and
+                    # D4 keeps it that way deliberately, so the reason would otherwise
+                    # be lost. The leader's reaction is already visible as the next
+                    # APPEND_ENTRIES_SENT with a lower prev_log_index.
+                    stale = message.term < self.state.current_term
+                    self._trace(
+                        EventKind.APPEND_ENTRIES_REJECTED,
+                        leader=message.leader_id,
+                        reason="stale_term" if stale else "log_mismatch",
+                        prev_log_index=message.prev_log_index,
+                        prev_log_term=message.prev_log_term,
+                    )
                 return reply.success
 
             case RequestVoteReply():
@@ -399,6 +462,9 @@ class RaftNode:
 
     def _apply_committed(self) -> list[Result]:
         """Hand every newly committed entry to the state machine, in order."""
+        # Before applying, not after: commitIndex moving is the event, and an entry is
+        # committed - unlosable - whether or not this node has run it yet.
+        self._check_commit_advance()
         results = self.store.apply_committed(self.state.log, self.state.commit_index)
         self.state.last_applied = self.store.last_applied
 
@@ -415,6 +481,12 @@ class RaftNode:
     def _start_election(self) -> None:
         request, self._tally = begin_election(self.state, self._rng, self.cluster_size)
         self.leader_id = None
+        self._trace(
+            EventKind.ELECTION_STARTED,
+            last_log_index=request.last_log_index,
+            last_log_term=request.last_log_term,
+            cluster_size=self.cluster_size,
+        )
 
         # A single-node cluster is its own majority and wins immediately.
         if self._tally.won:
@@ -422,14 +494,20 @@ class RaftNode:
             return
 
         for peer in self.peers:
+            self._trace(EventKind.VOTE_REQUESTED, peer=peer)
             self._send(peer, request)
 
     def _win_election(self) -> None:
+        # Read before the tally is dropped below: the winning count is the one thing
+        # about an election that exists nowhere in the resulting state.
+        votes = self._tally.votes if self._tally is not None else 1
+
         become_leader(self.state, self.peers)
         self.leader_id = self.node_id
         self._tally = None
         self._inflight.clear()
         self._last_heartbeat_ack.clear()
+        self._trace(EventKind.LEADER_ELECTED, votes=votes, cluster_size=self.cluster_size)
 
         # A no-op entry in the new term (paper §8). Without it, commit_index can sit
         # frozen at whatever this node knew as a follower: advance_commit_index's
@@ -457,6 +535,13 @@ class RaftNode:
     def _replicate_to(self, peer: NodeId) -> None:
         request = build_append_entries(self.state, peer)
         self._inflight[peer] = request.prev_log_index + len(request.entries)
+        self._trace(
+            EventKind.APPEND_ENTRIES_SENT,
+            peer=peer,
+            prev_log_index=request.prev_log_index,
+            entries=len(request.entries),
+            leader_commit=request.leader_commit,
+        )
         self._send(peer, request)
 
     def _send(self, dst: NodeId, message: Message) -> None:

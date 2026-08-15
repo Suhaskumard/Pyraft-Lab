@@ -22,6 +22,8 @@ from pyraft_lab.network.clock import Clock, WallClock
 from pyraft_lab.network.codec import DEFAULT_CODEC, Codec
 from pyraft_lab.network.link import IDEAL_LINK, LinkConfig
 from pyraft_lab.network.messages import Envelope, Message
+from pyraft_lab.observability.events import EventKind
+from pyraft_lab.observability.tracer import NULL_TRACER, Tracer
 
 
 @dataclass
@@ -38,6 +40,12 @@ class SimulatorStats:
     dropped_unknown_dst: int = 0
     dropped_partition: int = 0
     dropped_loss: int = 0
+    delayed: int = 0
+    "Messages held back rather than delivered at once - the latency fault, counted."
+
+    @property
+    def dropped(self) -> int:
+        return self.dropped_unknown_dst + self.dropped_partition + self.dropped_loss
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -46,6 +54,7 @@ class SimulatorStats:
             "dropped_unknown_dst": self.dropped_unknown_dst,
             "dropped_partition": self.dropped_partition,
             "dropped_loss": self.dropped_loss,
+            "delayed": self.delayed,
         }
 
 
@@ -57,9 +66,11 @@ class SimulatedNetwork:
     codec: Codec = DEFAULT_CODEC
     rng: random.Random = field(default_factory=random.Random)
     stats: SimulatorStats = field(default_factory=SimulatorStats)
+    tracer: Tracer = NULL_TRACER
 
     _inboxes: dict[NodeId, Inbox] = field(default_factory=dict, repr=False)
     _seq: dict[NodeId, int] = field(default_factory=dict, repr=False)
+    _crashed: set[NodeId] = field(default_factory=set, repr=False)
     _default_link: LinkConfig = field(default_factory=lambda: IDEAL_LINK, repr=False)
     _links: dict[tuple[NodeId, NodeId], LinkConfig] = field(default_factory=dict, repr=False)
     _groups: dict[NodeId, int] | None = field(default=None, repr=False)
@@ -72,11 +83,30 @@ class SimulatedNetwork:
         inbox = Inbox(node_id)
         self._inboxes[node_id] = inbox
         self._seq.setdefault(node_id, 0)
+        # Only something we reported as crashed can recover. A first registration is a
+        # node joining, and a participant that left cleanly never went down at all.
+        if node_id in self._crashed:
+            self._crashed.discard(node_id)
+            self.tracer.emit(EventKind.NODE_RECOVERED, node=node_id)
         return inbox
 
-    def unregister(self, node_id: NodeId) -> None:
+    def unregister(self, node_id: NodeId, *, crashed: bool = True) -> None:
+        """Detach a node, recording it as a crash unless told otherwise.
+
+        The network narrates this, not the node: a process that has crashed cannot
+        write down that it crashed, and from out here a clean stop and a crash are the
+        same observation - exactly as ``send`` cannot tell a crashed peer from a slow
+        one. See docs/architecture.md P4.
+
+        ``crashed=False`` is for participants whose departure is not a cluster event at
+        all: a client closing its channel at the end of a run is not a node going down,
+        and counting it as one would put a fault in the trace that never happened.
+        """
         if self._inboxes.pop(node_id, None) is None:
             raise UnknownNode(f"{node_id!r} is not registered")
+        if crashed:
+            self._crashed.add(node_id)
+            self.tracer.emit(EventKind.NODE_CRASHED, node=node_id)
 
     @property
     def nodes(self) -> frozenset[NodeId]:
@@ -114,7 +144,7 @@ class SimulatedNetwork:
         """Back to an ideal network: no latency, no loss, no partition."""
         self._default_link = IDEAL_LINK
         self._links.clear()
-        self._groups = None
+        self.heal()
 
     def partition(self, *groups: Iterable[NodeId]) -> None:
         """Split the network so nodes in different groups cannot reach each other.
@@ -123,14 +153,21 @@ class SimulatedNetwork:
         everyone. Calling this again replaces any partition already in effect.
         """
         assignment: dict[NodeId, int] = {}
+        materialized: list[list[NodeId]] = []
         for i, group in enumerate(groups):
-            for node in group:
+            members = list(group)
+            materialized.append(members)
+            for node in members:
                 assignment[node] = i
         self._groups = assignment
+        self.tracer.emit(EventKind.PARTITION_CREATED, groups=materialized)
 
     def heal(self) -> None:
         """Undo :meth:`partition`. Every node can reach every other node again."""
+        if self._groups is None:
+            return  # nothing was split; healing nothing is not an event
         self._groups = None
+        self.tracer.emit(EventKind.PARTITION_HEALED)
 
     def _is_partitioned(self, src: NodeId, dst: NodeId) -> bool:
         if self._groups is None:
@@ -179,6 +216,8 @@ class SimulatedNetwork:
             return
 
         delay = link.sample_delay(self.rng)
+        if delay > 0:
+            self.stats.delayed += 1
         self.clock.call_at(self.clock.now() + delay, lambda: self._deliver(dst, delivered))
 
     def _deliver(self, dst: NodeId, envelope: Envelope) -> None:
