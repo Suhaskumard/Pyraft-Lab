@@ -163,7 +163,7 @@ reports), and Phase 11 (dashboard) all consume an event trace that has to alread
   and why the pure modules stay untouched.
 - No dashboard yet — that's Phase 11, which reads `LiveMetrics.snapshot()`.
 
-### Phase 5 — Laboratory Core (Days 11–13, plus 2.0 items 6 and 8)
+### Phase 5 — Laboratory Core (Days 11–13, plus 2.0 items 6 and 8) — done
 
 YAML scenario runner (`experiments/runner.py`, `scenario.py`) upgraded with 2.0's
 chained fault-timeline DSL (item 8: `at:`/`action:` sequences — a superset of the
@@ -174,7 +174,7 @@ check failed — offending operations, node, term, timestamp, a heuristic cause 
 just PASS/FAIL. Seven required scenarios: `baseline`, `leader_crash`,
 `minority_partition`, `majority_partition`, `network_latency`, `packet_loss`, `churn`.
 
-### Phase 6 — Persistence Upgrade (2.0 items 9–10)
+### Phase 6 — Persistence Upgrade (2.0 items 9–10) — done
 
 WAL (`raft/persistence.py`) with per-record checksums, crash recovery, and log
 validation on restart (the original Day 7 persistence scope, upgraded per 2.0 item 9).
@@ -182,6 +182,31 @@ A corrupted-WAL-recovery test as an explicit edge case. Snapshots (`raft/snapsho
 promoted from the original's "deferred" to a real feature per 2.0 item 10:
 log-growth threshold → KV snapshot → persist → compact WAL. No network snapshot
 transfer (2.0 explicitly allows skipping that under time pressure).
+
+As built:
+
+- `raft/persistence.py` (done): `WriteAheadLog` — one record per line, CRC32 over a
+  canonical-JSON payload, six kinds (`header`/`term`/`entry`/`truncate`/`commit`/
+  `snapshot`). `RaftLog` records its own appends and truncations through a `LogJournal`;
+  `RaftNode` writes the term/vote pair and the commit index, and `_send` syncs before
+  anything leaves the node — "nothing this node has told anyone can be forgotten".
+  `read_wal` validates and folds: a torn final record recovers, corruption with valid
+  records behind it refuses unless explicitly repaired, and the fold enforces what a
+  checksum cannot (no holes, no term going backward, no commit past the end).
+- `raft/snapshot.py` (done): `Snapshot`/`SnapshotMeta` (checksummed payload, verified on
+  load), `SnapshotStore` (one file per snapshot, atomic write, prune), `SnapshotPolicy`
+  (applied-entries threshold, or WAL bytes). `RaftNode.take_snapshot` runs 2.0's flow in
+  crash-safe order: save and sync the snapshot, *then* compact the WAL against it.
+- `RaftLog` gains a base index, because a log recovered from a compacted WAL genuinely
+  starts partway along; it plays the sentinel's exact role in the consistency check, and
+  `build_append_entries` clamps `prevLogIndex` to it. Compaction itself is on-disk only —
+  see `docs/architecture.md` P6 for why, and for the one follower InstallSnapshot would
+  otherwise be needed for.
+- CLI: `pyraft-lab inspect-wal <path>` (prints 2.0 item 9's restart report, `--repair`,
+  `--records`) and `pyraft-lab inspect-snapshot <path>`. 2.0's `--node` forms of these,
+  and `snapshot --node`, need a cluster to address and arrive with Phase 9.
+- Persistence is opt-in throughout: a node built without a WAL behaves exactly as it did
+  before this phase, which is why Phase 5's runner is untouched (architecture P6).
 
 ### Phase 7 — Deterministic Replay (2.0 item 5)
 

@@ -200,9 +200,7 @@ class ExperimentRunner:
                 self.network, client_id, timeout=self._client_timeout, clock=self.clock
             )
             self._channels.append(channel)
-            client = KVClient(
-                client_id, ids, channel, policy=RetryPolicy(), clock=self.clock
-            )
+            client = KVClient(client_id, ids, channel, policy=RetryPolicy(), clock=self.clock)
             self.clients[client_id] = client
             workloads.append(
                 Workload(
@@ -266,11 +264,14 @@ class ExperimentRunner:
 
             await self.clock.advance_to(target)
 
-            if all(task.done() for task in tasks) and not pending:
-                # The workload is finished and nothing is left to break; running the
-                # clock to the end would only add idle heartbeats to the trace.
-                if self.clock.now() >= self.scenario.duration:
-                    break
+            # The workload is finished and nothing is left to break; running the clock
+            # to the end would only add idle heartbeats to the trace.
+            if (
+                all(task.done() for task in tasks)
+                and not pending
+                and self.clock.now() >= self.scenario.duration
+            ):
+                break
 
         await self._pump()
 
@@ -440,8 +441,7 @@ class ExperimentRunner:
         committed = [
             entry.command
             for index in range(1, node.state.commit_index + 1)
-            if (entry := node.state.log.entry_at(index)) is not None
-            and entry.command is not None
+            if (entry := node.state.log.entry_at(index)) is not None and entry.command is not None
         ]
         return NodeSnapshot(
             node_id=node_id,

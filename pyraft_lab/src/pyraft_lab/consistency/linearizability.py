@@ -345,9 +345,7 @@ class _TraceContext:
         the point. It is the last election the trace recorded before this moment.
         """
         elected = [
-            e
-            for e in self.events
-            if e.kind is EventKind.LEADER_ELECTED and e.timestamp <= when
+            e for e in self.events if e.kind is EventKind.LEADER_ELECTED and e.timestamp <= when
         ]
         return elected[-1].node if elected else None
 
@@ -364,8 +362,7 @@ class _TraceContext:
 
     def election_between(self, start: float, end: float) -> bool:
         return any(
-            e.kind is EventKind.LEADER_ELECTED and start <= e.timestamp <= end
-            for e in self.events
+            e.kind is EventKind.LEADER_ELECTED and start <= e.timestamp <= end for e in self.events
         )
 
     def crashed_at(self, when: float) -> set[NodeId]:

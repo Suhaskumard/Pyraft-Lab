@@ -7,7 +7,7 @@ recovery time and linearizability under failure.
 
 Two layers:
 
-1. **The system** — Raft + KV + WAL
+1. **The system** — Raft + KV + WAL + snapshots
 2. **The laboratory** — fault injection + experiments + analytics
 
 ## Status
@@ -22,8 +22,8 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 2 — KV & client | **done** — PUT/GET/DELETE/CAS state machine, leader-discovering client |
 | 3 — Failure handling | **done** — crash recovery, simulated network, partitions, linearizable reads |
 | 4 — Observability foundation | **done** — event vocabulary, run tracer, live metrics |
-| 5 — Laboratory core | next |
-| 6 — Persistence & snapshots | not started |
+| 5 — Laboratory core | **done** — scenario runner, fault timelines, metrics, linearizability |
+| 6 — Persistence & snapshots | **done** — checksummed WAL, crash recovery, snapshots + compaction |
 | 7 — Deterministic replay | not started |
 | 8 — Stress & chaos | not started |
 | 9 — Cluster controller & CLI | not started |
@@ -51,12 +51,31 @@ pytest
 ## CLI
 
 ```bash
-pyraft-lab version    # installed version
-pyraft-lab kinds      # message kinds this build can put on the wire
+pyraft-lab version                    # installed version
+pyraft-lab kinds                      # message kinds this build can put on the wire
+pyraft-lab inspect-wal <path>          # validate a WAL, print what a restart recovers
+pyraft-lab inspect-wal <path> --repair # discard from the first corrupt record onward
+pyraft-lab inspect-snapshot <path>     # verify and print a snapshot's metadata
 ```
 
 The cluster and experiment commands (`start`, `put`, `get`, `status`, `show-log`,
 `run --scenario ...`, `results`) arrive with their phases.
+
+## Persistence
+
+Opt-in, the same way tracing is: a `RaftNode` built without a `WriteAheadLog` behaves
+exactly as it did before Phase 6.
+
+```python
+wal = WriteAheadLog("data/n1.wal", node_id="n1")
+snapshots = SnapshotStore("data/n1-snapshots")
+node = RaftNode("n1", ids, transport, wal=wal, snapshots=snapshots)
+# __init__ recovers term, vote, log and commit index from the WAL before the node runs.
+node.take_snapshot()  # by hand, or automatically once SnapshotPolicy's threshold is due
+```
+
+A crash is recovered by building the same `RaftNode` again against the same files.
+`pyraft-lab inspect-wal` and `inspect-snapshot` read either one without a node at all.
 
 ## Tracing a run
 

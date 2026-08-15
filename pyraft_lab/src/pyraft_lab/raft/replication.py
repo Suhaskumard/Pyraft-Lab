@@ -52,9 +52,16 @@ def build_append_entries(
     Sends everything the follower is missing, up to ``max_batch``. When it is already
     caught up this naturally produces an empty ``entries`` list - which is exactly a
     heartbeat, so a leader needs no separate heartbeat path.
+
+    ``prevLogIndex`` never goes below the log's base (Phase 6): on a leader that came
+    back from a compacted WAL, the entries below it are not there to send. Clamping is
+    right rather than merely safe for every follower that still holds the committed
+    prefix - which is all of them, since a snapshot only ever covers applied entries -
+    and it is where a follower that has *lost* that prefix would need an InstallSnapshot
+    we deliberately do not implement (see raft/snapshot.py and architecture P6).
     """
     next_index = state.next_index.get(peer, state.log.last_index + 1)
-    prev_index = next_index - 1
+    prev_index = max(next_index - 1, state.log.base_index)
     prev_term = state.log.term_at(prev_index)
     if prev_term is None:
         # The follower's nextIndex points past our own log - only possible from stale

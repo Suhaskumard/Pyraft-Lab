@@ -34,9 +34,7 @@ PARTITION = "partition"
 HEAL_PARTITION = "heal_partition"
 RESET_FAULTS = "reset_faults"
 
-ACTIONS = frozenset(
-    {CRASH, RECOVER, LATENCY, PACKET_LOSS, PARTITION, HEAL_PARTITION, RESET_FAULTS}
-)
+ACTIONS = frozenset({CRASH, RECOVER, LATENCY, PACKET_LOSS, PARTITION, HEAL_PARTITION, RESET_FAULTS})
 
 #: How the original document's ``type:`` names map onto timeline actions, and what
 #: undoes each one when a ``duration:`` says it should end.
@@ -275,9 +273,7 @@ def _parse_flat(entry: dict[str, Any], index: int) -> list[FaultStep]:
 
     action, _ = _FLAT_TYPES[kind]
     at = parse_duration(entry.get("start", 0), what=f"fault #{index + 1} 'start'")
-    params = {
-        k: v for k, v in entry.items() if k not in {"type", "start", "duration", "target"}
-    }
+    params = {k: v for k, v in entry.items() if k not in {"type", "start", "duration", "target"}}
 
     steps = [FaultStep(at=at, action=action, target=_target_of(entry), params=params)]
 

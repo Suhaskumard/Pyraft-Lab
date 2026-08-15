@@ -306,9 +306,10 @@ def report(result: RunResult, *, check_consistency: bool = True) -> dict[str, An
     document["expectations"] = [
         item.to_dict() for item in evaluate_expectations(result.scenario.expected, document)
     ]
-    document["passed"] = all(
-        item["met"] for item in document["expectations"] if item["checked"]
-    ) and not document["summary"]["data_loss"]
+    document["passed"] = (
+        all(item["met"] for item in document["expectations"] if item["checked"])
+        and not document["summary"]["data_loss"]
+    )
     return document
 
 

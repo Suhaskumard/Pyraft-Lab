@@ -9,6 +9,13 @@ Timing runs against an injected ``Clock`` (Day 8): the real event loop clock by
 default, or a ``VirtualClock`` a test or the experiment runner drives by hand. Neither
 swap touches the decision logic in ``rpc.py``/``election.py``/``replication.py``,
 which is exactly why the two are separated.
+
+Persistence (Phase 6) is injected the same way and is equally optional. Given a
+``WriteAheadLog``, this node recovers its Figure 2 persistent state from it before it
+runs at all, and syncs anything new to disk before any message leaves - so a crash can
+never lose something a peer or a client was already told. Given a ``SnapshotStore`` as
+well, it snapshots the state machine when the log has grown past the policy's threshold
+and compacts the WAL behind it.
 """
 
 from __future__ import annotations
@@ -35,6 +42,7 @@ from pyraft_lab.raft.election import (
     majority,
     random_election_timeout,
 )
+from pyraft_lab.raft.persistence import WalError, WalRecovery, WriteAheadLog
 from pyraft_lab.raft.replication import (
     advance_commit_index,
     append_command,
@@ -48,6 +56,13 @@ from pyraft_lab.raft.rpc import (
     RequestVoteReply,
     handle_append_entries,
     handle_request_vote,
+)
+from pyraft_lab.raft.snapshot import (
+    Snapshot,
+    SnapshotError,
+    SnapshotMeta,
+    SnapshotPolicy,
+    SnapshotStore,
 )
 from pyraft_lab.raft.state import RaftState, Role
 
@@ -64,6 +79,9 @@ class RaftNode:
         rng: random.Random | None = None,
         clock: Clock | None = None,
         tracer: Tracer | None = None,
+        wal: WriteAheadLog | None = None,
+        snapshots: SnapshotStore | None = None,
+        snapshot_policy: SnapshotPolicy | None = None,
         election_timeout_range: tuple[float, float] = ELECTION_TIMEOUT_RANGE,
         heartbeat_interval: float = HEARTBEAT_INTERVAL,
     ) -> None:
@@ -106,9 +124,30 @@ class RaftNode:
         # current term - the leader lease Day 10's reads are served against.
         self._last_heartbeat_ack: dict[NodeId, float] = {}
 
+        # Phase 6. Both optional and independent: no WAL means this node forgets
+        # everything on restart, exactly as it did before this phase; a WAL without a
+        # snapshot store means the file grows for the life of the run.
+        self.wal = wal
+        self.snapshots = snapshots
+        self.snapshot_policy = (
+            snapshot_policy
+            if snapshot_policy is not None
+            else (SnapshotPolicy() if snapshots is not None else None)
+        )
+        self.recovery: WalRecovery | None = None if wal is None else self._restore(wal)
+        self._snapshot_index = self.state.log.base_index
+
+        # What the WAL has been told. Term/vote and commitIndex all move inside pure
+        # functions with nothing to persist them, so - as with the tracer below - the
+        # node watches the values rather than asking each call site to remember.
+        self._persisted_vote = (self.state.current_term, self.state.voted_for)
+        self._persisted_commit = self.state.commit_index
+
         # Last values the tracer was told about. Term and commit index both move inside
         # pure functions that have no tracer and should not grow one, so the node
         # watches them instead of asking every call site to remember to report.
+        # Initialized after any recovery above, so a restart does not narrate the term
+        # it woke up in as a term change.
         self._traced_term = self.state.current_term
         self._traced_commit = self.state.commit_index
 
@@ -123,6 +162,142 @@ class RaftNode:
     @property
     def current_term(self) -> int:
         return self.state.current_term
+
+    # --- persistence (Phase 6) ---------------------------------------------------
+    #
+    # Three obligations, and they are all about *ordering* rather than about writing:
+    #
+    # 1. recover before running. A node that campaigned in term 7 and then crashed must
+    #    come back in term 7 with the vote it cast, or it can vote twice in one term and
+    #    two leaders can be elected. Recovery therefore happens in ``__init__``, not in
+    #    ``start`` - so no code path can observe this node in a state it never had.
+    # 2. sync before speaking. Everything ``_send`` puts on the wire is a claim about
+    #    this node's state; if the state that produced it is not yet on disk, a crash can
+    #    make the claim retroactively false. So the fsync sits in ``_send`` itself rather
+    #    than at each of the call sites that would have to remember.
+    # 3. snapshot behind the state machine, never ahead of it. A snapshot may only cover
+    #    entries that have been applied, since those are the only ones whose effect is
+    #    in the state it captures.
+
+    def _restore(self, wal: WriteAheadLog) -> WalRecovery:
+        """Rebuild this node's state from its WAL, and attach the WAL to its log.
+
+        2.0 item 9's restart sequence: load, validate, recover state, replay committed
+        entries. Validation and the fold live in ``persistence.py``; what is left here is
+        the part that needs to know about a *node* - installing the snapshot into the
+        state machine, clamping the recovered commit index to the log that actually came
+        back, and replaying the committed prefix through ``KVStore``.
+        """
+        recovery = wal.recover()
+        if recovery.node_id and recovery.node_id != self.node_id:
+            raise WalError(f"{wal.path} belongs to {recovery.node_id}, not to {self.node_id}")
+
+        self.state.current_term = recovery.term
+        self.state.voted_for = recovery.voted_for
+
+        if recovery.snapshot is not None:
+            self._install_snapshot(recovery.snapshot)
+
+        self.state.log.restore(
+            recovery.entries, base_index=recovery.base_index, base_term=recovery.base_term
+        )
+        # Only now is the log allowed to journal: restoring through the journal would
+        # re-write on every restart the very records it had just read.
+        self.state.log.journal = wal
+
+        # Clamped, because the recovered commit index is a claim about a log we may hold
+        # less of than we did: a torn tail can take an entry with it that a commit record
+        # written before the crash already counted.
+        self.state.commit_index = min(recovery.commit_index, self.state.log.last_index)
+        self.store.apply_committed(self.state.log, self.state.commit_index)
+        self.state.last_applied = self.store.last_applied
+        return recovery
+
+    def _install_snapshot(self, meta: SnapshotMeta) -> None:
+        """Load the snapshot the WAL points at into the state machine."""
+        if self.snapshots is None:
+            raise SnapshotError(
+                f"{self.node_id}'s WAL was compacted against a snapshot at index "
+                f"{meta.last_included_index}, but no snapshot store was given to read it from"
+            )
+        snapshot = self.snapshots.load(meta.last_included_index)
+        self.store.restore(snapshot.data, snapshot.meta.last_included_index)
+
+    def _persist(self) -> None:
+        """Write anything that has changed, then fsync. Called before this node speaks.
+
+        Log entries are already in the file by now - ``RaftLog``'s journal wrote them as
+        they were appended - so what is left is the pair of scalars no journal watches,
+        and the sync that makes all of it durable together.
+        """
+        wal = self.wal
+        if wal is None:
+            return
+
+        vote = (self.state.current_term, self.state.voted_for)
+        if vote != self._persisted_vote:
+            wal.record_term(*vote)
+            self._persisted_vote = vote
+        if self.state.commit_index != self._persisted_commit:
+            wal.record_commit(self.state.commit_index)
+            self._persisted_commit = self.state.commit_index
+        wal.sync()
+
+    def take_snapshot(self) -> SnapshotMeta | None:
+        """Snapshot the state machine and compact the WAL behind it (2.0 item 10).
+
+        Returns the snapshot's metadata, or ``None`` if there was nothing new to capture.
+        Public because ``pyraft-lab snapshot --node ...`` (Phase 9, once there is a
+        cluster to address) and a test both want to ask for one by hand rather than wait
+        for the threshold.
+
+        The order is what makes this crash-safe: the snapshot file is written and synced
+        *before* the WAL is compacted against it, so a crash in between leaves an
+        uncompacted WAL that still holds every entry, and the orphaned snapshot is
+        simply ignored.
+        """
+        if self.wal is None or self.snapshots is None:
+            return None
+
+        index = self.state.last_applied
+        term = self.state.log.term_at(index)
+        if index <= self._snapshot_index or term is None:
+            return None
+
+        snapshot = Snapshot.create(
+            last_included_index=index,
+            last_included_term=term,
+            data=self.store.snapshot(),
+            node_id=self.node_id,
+            created_at=self._now(),
+        )
+        self.snapshots.save(snapshot)
+        self.wal.compact(
+            snapshot=snapshot.meta,
+            term=self.state.current_term,
+            voted_for=self.state.voted_for,
+            entries=self.state.log.entries_from(index + 1),
+            commit_index=self.state.commit_index,
+        )
+        # Compaction rewrote both scalars, so what the WAL holds is current by
+        # definition; leaving the watchers stale would write them again for nothing.
+        self._persisted_vote = (self.state.current_term, self.state.voted_for)
+        self._persisted_commit = self.state.commit_index
+        self._snapshot_index = index
+        self.snapshots.prune()
+        return snapshot.meta
+
+    def _maybe_snapshot(self) -> None:
+        """Take a snapshot if the policy says the log has grown enough."""
+        policy = self.snapshot_policy
+        if policy is None or self.wal is None or self.snapshots is None:
+            return
+        if policy.due(
+            applied_index=self.state.last_applied,
+            last_snapshot_index=self._snapshot_index,
+            wal_bytes=self.wal.size,
+        ):
+            self.take_snapshot()
 
     # --- lifecycle ---------------------------------------------------------------
 
@@ -150,6 +325,12 @@ class RaftNode:
         if self._inbox is not None:
             self.transport.unregister(self.node_id, crashed=crashed)
             self._inbox = None
+        if self.wal is not None:
+            # No fsync here on purpose: from the WAL's side stopping *is* the crash, and
+            # everything this node ever told anyone was synced before it said it. The
+            # file is only let go of so a stopped node holds no handle; the next write
+            # reopens it.
+            self.wal.close()
 
     # --- the loop ----------------------------------------------------------------
 
@@ -378,6 +559,10 @@ class RaftNode:
         # ever move commitIndex.
         advance_commit_index(self.state, self.cluster_size)
         self._apply_committed()
+        # Explicitly, rather than relying on the sends below: a single-node cluster has
+        # no peer to replicate to, and a submission with no client waiting on it sends
+        # nothing at all - but the entry is committed either way, so it has to be safe.
+        self._persist()
         for peer in self.peers:
             self._replicate_to(peer)
         return entry.index
@@ -476,6 +661,11 @@ class RaftNode:
                     client,
                     ClientReply(request_id=request_id, ok=result.ok, value=result.value),
                 )
+
+        # After the clients have their answers, not before: a snapshot rewrites the WAL,
+        # and there is no reason to make a waiting client's reply queue behind that.
+        if results:
+            self._maybe_snapshot()
         return results
 
     def _start_election(self) -> None:
@@ -545,4 +735,9 @@ class RaftNode:
         self._send(peer, request)
 
     def _send(self, dst: NodeId, message: Message) -> None:
+        # Durability before disclosure (Phase 6): a vote, an entry or a commit index
+        # this node is about to tell somebody about has to be on disk first, or a crash
+        # can make what it said untrue. Cheap in practice - ``sync`` is a no-op unless
+        # something was actually written, so an idle heartbeat costs nothing.
+        self._persist()
         self.transport.send(self.node_id, dst, message)

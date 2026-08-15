@@ -304,10 +304,133 @@ Deriving it purely from events costs a little duplication and buys the property 
 matters: a metric cannot look right while the trace is wrong. If the fold shows the
 wrong leader, the trace is wrong — and the trace is what Phase 7 will replay from.
 
+### P6 — one line per record, checksummed, and text
+
+**Decision:** the WAL is a text file, one record per line: a CRC32 of the payload, a
+space, then the payload as canonical JSON. Six record kinds — `header`, `term`, `entry`,
+`truncate`, `commit`, `snapshot`.
+
+**Why:** the failure a crash actually produces is a half-written record at the end of the
+file, and a line-delimited format makes that failure both detectable and *contained* — the
+tail is either a whole valid record or it is not, and the prefix before it is untouched.
+A checksum per record rather than per file is what makes that judgement per-record: a
+whole-file digest can only say "something is wrong somewhere", which is exactly the answer
+that forces you to throw away good data.
+
+Text, at some cost in bytes, because this file is evidence in a failure investigation.
+When a partition trace and a WAL disagree, being able to read the WAL with `head` is worth
+more than the space a binary frame would save. CRC32 rather than a cryptographic hash for
+the same kind of reason inverted: the threat is a torn write and a rotted byte, both
+accidents, and defending against those has to be cheap enough to afford on every record.
+
+### P6 — the log journals itself; the node persists the two scalars
+
+**Decision:** `RaftLog` takes a `LogJournal` and records every `append` and
+`truncate_from` through it. `currentTerm`/`votedFor` and `commitIndex` are written by
+`RaftNode`, which watches them for changes rather than being told.
+
+**Why:** the same split, and the same reasoning, as P4's tracer — with one deliberate
+difference. Log mutations pass through exactly two methods, so recording them there means
+no call site can forget (D2's argument for `observe_term`). But the term and the commit
+index both move *inside* pure functions that have nothing to persist them and should not
+grow a WAL to do it, so the node watches those two values the way it already watches them
+for tracing.
+
+The difference from the tracer is that this is not instrumentation. A trace that lags
+reality is a worse trace; a WAL that lags reality is a lost write. So the journal call is
+synchronous and ordered with the mutation, and it is not opt-in per event — only the whole
+WAL is optional (`NULL_JOURNAL`, so a node without one pays nothing).
+
+### P6 — fsync lives in `_send`, not at each call site
+
+**Decision:** `RaftNode._send` persists and syncs before handing anything to the
+transport. `WriteAheadLog.sync` is the only `fsync` in the system, and is a no-op when
+nothing has been written since the last one.
+
+**Why:** the rule that actually matters is not "write everything down" but *nothing this
+node has told anyone can be forgotten*. Every claim a node makes about its own state
+leaves through one door, so putting the sync in that door makes the rule structural
+instead of a checklist item at half a dozen call sites — and a future call site gets it
+for free rather than being a silent durability hole.
+
+The cost looks alarming (an fsync per message) and is not: the sync is skipped unless a
+record was actually written, so heartbeats and read replies cost nothing, and a batch of
+entries appended together is one sync rather than one per entry. `submit` syncs explicitly
+as well, because a single-node cluster commits without sending anything.
+
+### P6 — `commitIndex` is persisted, though Figure 2 calls it volatile
+
+**Decision:** a `commit` record goes in the WAL, and recovery restores `commitIndex` from
+it, clamped to the length of the log that actually came back.
+
+**Why:** it is safe and it is useful. Safe, because `commitIndex` only ever moves forward
+and a recorded value was true when it was written — Raft's guarantee that a committed
+entry is on a majority does not expire on a restart. Useful, because the alternative is a
+restarted node that knows nothing is committed until a leader tells it again, which means
+its state machine is empty until then and 2.0 item 9's "Replaying committed entries..."
+has nothing to replay. The clamp is what keeps it honest: if a torn tail took an entry
+that a commit record already counted, the recovered commit index follows the log down.
+
+### P6 — compaction is on-disk; the in-memory log stays whole
+
+**Decision:** `take_snapshot` writes the snapshot, rewrites the WAL as snapshot + tail,
+and leaves the in-memory log intact. A log with a base index above 0 therefore only ever
+appears after a *restart* from a compacted WAL.
+
+**Why:** 2.0 allows skipping network snapshot transfer, and InstallSnapshot stays deferred
+(below) — which means a follower that is further behind than a snapshot's boundary can
+only be repaired from the leader's log. Dropping the in-memory prefix would trade a bounded
+disk cost for an unbounded correctness one: a leader would become unable to catch up a
+follower it can currently repair from any point. Compaction on disk buys what a snapshot is
+actually for here — a bounded WAL and a bounded restart — without buying that.
+
+Where the prefix genuinely no longer exists, after a restart, `RaftLog`'s base index stands
+in for the sentinel and plays exactly the same role in the AppendEntries consistency check,
+and `build_append_entries` clamps `prevLogIndex` to it. That clamp is right rather than
+merely safe for every follower that still holds the committed prefix — which is all of
+them, since a snapshot only ever covers *applied* entries, and applied entries cannot
+diverge. The one case it cannot serve is a follower that has lost committed entries below
+that base: it rejects, `nextIndex` walks back, the clamp holds, and that follower stops
+making progress while the rest of the cluster is unaffected. That is precisely the hole
+InstallSnapshot fills, and it is named here rather than hidden.
+
+### P6 — a torn tail recovers; corruption in the middle refuses
+
+**Decision:** a damaged *final* record is discarded and recovery succeeds. A damaged
+record with valid records after it raises `WalCorruption` unless recovery is explicitly
+asked to repair, in which case that record and everything after it is dropped and the
+report says how much.
+
+**Why:** these are different events and treating them alike loses either data or trust.
+A damaged last record is a crash during that append — nothing was ever acknowledged on the
+strength of it, so dropping it costs nothing and needs no operator. Damage with valid
+records behind it is not a torn write, and the records past it cannot simply be applied:
+recovery is a *fold*, and a fold that skips a record is not a replay of what happened —
+skip a `truncate` and entries reappear that a leader had already overwritten. Silently
+folding past it would produce a state the node never had, which is worse than refusing.
+
+Recovery also validates the *sequence*, not just each record: a hole in the indexes, a
+term record going backward, a commit index past the end of the log. A checksum proves a
+record was not damaged; only the fold can prove the file is a log. Those checks raise even
+with repair enabled, because they indicate a bug rather than a bad byte.
+
+### P6 — the experiment runner still builds nodes without WALs
+
+**Decision:** Phase 5's `ExperimentRunner` is unchanged; scenario runs stay in memory.
+
+**Why:** a scenario's reproducibility comes from the seed and the virtual clock, not from
+disk, and giving every run an fsync per message would slow the laboratory down without
+making a single measurement more accurate. The case where persistence changes the *answer*
+is a restart that keeps its state — which is Phase 8's chaos campaign, whose safety
+invariant is "committed data is never silently lost". Wiring it in there is one constructor
+argument, and it belongs to that phase rather than being pre-emptively bolted on here.
+
 ## Deferred
 
 - **InstallSnapshot.** Listed in the specification's RPC table but assigned no day, and
-  genuinely out of scope for 15 days. Declared deferred rather than half-built.
+  2.0 explicitly allows skipping network snapshot transfer. Declared deferred rather than
+  half-built. P6 above names exactly what it would fix: a follower missing committed
+  entries below a restarted leader's snapshot boundary.
 - **A leader that self-demotes without a quorum.** A partitioned leader keeps believing
   it leads until it hears a higher term — correct per §5.1, and safe, since D10's lease
   already stops it serving reads and the majority rule already stops it committing. A

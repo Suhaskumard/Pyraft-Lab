@@ -155,8 +155,14 @@ def plot_replication(result: RunResult, path: Path) -> Path:
 
     for index, (node_id, points) in enumerate(sorted(series.items())):
         xs, ys = zip(*points, strict=True)
-        top.step(xs, ys, where="post", label=node_id, linewidth=1.2,
-                 color=LEADER_COLORS[index % len(LEADER_COLORS)])
+        top.step(
+            xs,
+            ys,
+            where="post",
+            label=node_id,
+            linewidth=1.2,
+            color=LEADER_COLORS[index % len(LEADER_COLORS)],
+        )
 
     xs, ys = zip(*spread, strict=True)
     bottom.fill_between(xs, ys, step="post", color="#C44E52", alpha=0.35)
