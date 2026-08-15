@@ -21,7 +21,9 @@ runner = CliRunner()
         "pyraft_lab.kv",
         "pyraft_lab.network",
         "pyraft_lab.client",
-        "pyraft_lab.lab",
+        "pyraft_lab.experiments",
+        "pyraft_lab.observability",
+        "pyraft_lab.consistency",
         "pyraft_lab.cli",
     ],
 )
