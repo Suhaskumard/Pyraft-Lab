@@ -30,6 +30,7 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 10 — Benchmarking | **done** — `pyraft-lab benchmark` across node counts × packet loss, comparison graphs, `--plot` for any run |
 | 11 — Dashboard | **done** — `dashboard` command inside `cluster start`: live term/leader/health, per-node role, commit/applied/log length, election time, p99 latency, availability |
 | 12 — Docs & ship | **done** — directory layout finalized, full integration suite, [technical report](docs/technical_report.md), narrated demo, `v0.1.0` |
+| 13 — HTTP API & web front end | **done** — `pyraft-lab serve`, a live event stream, and a React workbench over the whole system |
 
 Nothing in this repo mocks a Raft mechanism or hard-codes a metric. Commands that
 cannot yet be answered honestly are absent from the CLI rather than stubbed.
@@ -86,7 +87,34 @@ pyraft-lab run --scenario <path>       # run one scenario file, persist it, prin
 pyraft-lab run --scenario <path> --plot <dir>  # also write its latency/leadership/replication/consistency plots
 pyraft-lab results                     # list persisted runs, newest first
 pyraft-lab benchmark                   # compare {3,5,7} nodes x {0,5,10,20}% loss, graphs + benchmark-report.json
+pyraft-lab serve                       # the HTTP API the web front end drives
 ```
+
+## Web front end
+
+`pyraft-lab serve` exposes everything above over HTTP, and [`../frontend`](../frontend)
+is a React workbench on top of it: the live cluster, the key-value store, the WAL and
+snapshot inspectors, the fault-injection lab, and the scenario/stress/chaos/benchmark
+campaigns with per-trial progress as they run.
+
+```bash
+pip install -e ".[api]"
+pyraft-lab init
+pyraft-lab serve                       # http://127.0.0.1:8000, /docs for the OpenAPI page
+
+cd ../frontend && npm install && npm run dev    # http://localhost:5173
+```
+
+Same one-process model as `cluster start` (see [docs/architecture.md](docs/architecture.md)
+P9 and P13): the cluster the API serves belongs to that process and lives for exactly as
+long as it. There is still no daemon. Nothing in `api/` reimplements a behaviour the
+library already has — `POST /api/cluster/exec` runs the REPL's own dispatcher, so a `put`
+typed in a browser and a `put` typed at `pyraft-lab cluster start` are one implementation.
+
+Campaigns started over the API run on worker threads with event loops of their own. A
+virtual-clock run never yields to real time, so awaiting one on the API's loop would
+freeze the live cluster sharing it — `tests/test_api.py` asserts that a campaign leaves
+the live cluster's leader and term untouched.
 
 ## Deterministic replay
 

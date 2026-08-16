@@ -347,12 +347,23 @@ async def _run_trial(config: StressConfig, trial_index: int) -> tuple[RunResult,
     return result, trial
 
 
-async def run_stress(config: StressConfig) -> StressReport:
-    """Run every trial of a stress campaign and tally the results."""
+async def run_stress(
+    config: StressConfig,
+    *,
+    on_trial: Callable[[StressTrialResult, int, int], None] | None = None,
+) -> StressReport:
+    """Run every trial of a stress campaign and tally the results.
+
+    ``on_trial`` is called with ``(result, completed, total)`` as each trial finishes,
+    for a caller that needs to report progress while the campaign is still running.
+    Raising from it aborts the campaign, which is how cancellation reaches here.
+    """
     trials = []
     for index in range(config.trials):
         _, trial = await _run_trial(config, index)
         trials.append(trial)
+        if on_trial is not None:
+            on_trial(trial, len(trials), config.trials)
     return StressReport(config=config, trials=trials)
 
 

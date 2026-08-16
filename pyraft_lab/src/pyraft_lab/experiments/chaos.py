@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import random
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -352,12 +353,22 @@ async def _run_trial(config: ChaosConfig, trial_index: int) -> tuple[RunResult, 
     return result, trial
 
 
-async def run_chaos(config: ChaosConfig) -> ChaosReport:
-    """Run every trial of a chaos campaign and tally the results."""
+async def run_chaos(
+    config: ChaosConfig,
+    *,
+    on_trial: Callable[[ChaosTrialResult, int, int], None] | None = None,
+) -> ChaosReport:
+    """Run every trial of a chaos campaign and tally the results.
+
+    ``on_trial`` is called with ``(result, completed, total)`` as each trial finishes -
+    see :func:`~pyraft_lab.experiments.stress.run_stress` for the same seam.
+    """
     trials = []
     for index in range(config.trials):
         _, trial = await _run_trial(config, index)
         trials.append(trial)
+        if on_trial is not None:
+            on_trial(trial, len(trials), config.trials)
     return ChaosReport(config=config, trials=trials)
 
 

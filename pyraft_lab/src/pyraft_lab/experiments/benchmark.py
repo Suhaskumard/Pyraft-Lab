@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import time
 import tracemalloc
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -219,13 +220,23 @@ async def _run_cell(config: BenchmarkConfig, nodes: int, loss_rate: float) -> Be
     )
 
 
-async def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
-    """Run every ``(nodes, loss_rate)`` cell of the grid and collect the results."""
-    cells = [
-        await _run_cell(config, nodes, loss_rate)
-        for nodes in config.node_counts
-        for loss_rate in config.loss_rates
-    ]
+async def run_benchmark(
+    config: BenchmarkConfig,
+    *,
+    on_cell: Callable[[BenchmarkCell, int, int], None] | None = None,
+) -> BenchmarkReport:
+    """Run every ``(nodes, loss_rate)`` cell of the grid and collect the results.
+
+    ``on_cell`` is called with ``(cell, completed, total)`` as each cell finishes - see
+    :func:`~pyraft_lab.experiments.stress.run_stress` for the same seam.
+    """
+    grid = [(nodes, loss) for nodes in config.node_counts for loss in config.loss_rates]
+    cells = []
+    for nodes, loss_rate in grid:
+        cell = await _run_cell(config, nodes, loss_rate)
+        cells.append(cell)
+        if on_cell is not None:
+            on_cell(cell, len(cells), len(grid))
     return BenchmarkReport(config=config, cells=cells)
 
 

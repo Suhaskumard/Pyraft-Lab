@@ -514,6 +514,34 @@ def run(
 
 
 @app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", help="Address to bind.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Port to bind.")] = 8000,
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", help="Where cluster.yaml, scenarios/ and results/ live."),
+    ] = Path("."),
+) -> None:
+    """Serve the HTTP API the web front end drives this project through.
+
+    Same one-process model as ``cluster start`` (docs/architecture.md P9): the live
+    cluster this serves belongs to *this* process and lives for exactly as long as it.
+    Campaigns started over the API run on worker threads of their own so a
+    virtual-clock run cannot starve the live cluster's wall-clock timers.
+    """
+    try:
+        import uvicorn
+
+        from pyraft_lab.api.server import create_app
+    except ImportError as exc:
+        typer.echo(f"the API needs its extra dependencies: pip install -e '.[api]'  ({exc})")
+        raise typer.Exit(2) from exc
+
+    typer.echo(f"pyraft-lab API on http://{host}:{port}  (workspace: {workspace.resolve()})")
+    uvicorn.run(create_app(workspace), host=host, port=port, log_level="info")
+
+
+@app.command()
 def results(
     results_dir: Annotated[
         Path, typer.Option("--results-dir", help="Where persisted runs live.")

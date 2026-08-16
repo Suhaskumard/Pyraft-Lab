@@ -1,0 +1,408 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+:root {
+  /* Obsidian Distributed Color Palette */
+  --bg-space: #101419;
+  --surface-lowest: #0b0e14;
+  --surface-low: #181c21;
+  --surface-base: #1c2025;
+  --surface-high: #272a30;
+  --surface-highest: #32353b;
+  --surface-bright: #36393f;
+
+  --text-main: #e0e2ea;
+  --text-muted: #c0c7d4;
+  --text-dim: #8b919d;
+
+  --border-color: #30363d;
+  --border-subtle: #414752;
+  --border-strong: #8b919d;
+
+  /* Primary & Accents */
+  --primary-blue: #58a6ff;
+  --primary-dim: #a2c9ff;
+  --primary-dark: #003a6b;
+  
+  --secondary-purple: #8957e5;
+  --secondary-light: #d3bbff;
+  --secondary-dark: #5b21b5;
+
+  /* Semantics */
+  --green-success: #4ade80;
+  --green-container: #003919;
+  
+  --amber-warning: #ffba42;
+  --amber-container: #4f3400;
+
+  --red-error: #ffb4ab;
+  --red-container: #93000a;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Geometry */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-pill: 9999px;
+  --radius-none: 0px;
+
+  /* Spacing Base 4px */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-space);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.4;
+  letter-spacing: 0em;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--surface-lowest);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* Everything below is the Obsidian component vocabulary, declared inside Tailwind's
+   `components` layer so a utility written alongside one of these classes still wins -
+   `class="obsidian-card p-4"` has to mean p-4, and unlayered CSS would beat it. */
+@layer components {
+
+/* Base Utility Classes */
+.font-sans { font-family: var(--font-sans); }
+.font-mono { font-family: var(--font-mono); }
+
+.label-caps {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.mono-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.mono-data {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+/* Obsidian Panels & Card Containers */
+.obsidian-card {
+  background-color: var(--surface-base);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.obsidian-card:hover {
+  border-color: var(--border-subtle);
+}
+
+.obsidian-card-interactive {
+  cursor: pointer;
+}
+.obsidian-card-interactive:hover {
+  border-color: var(--primary-blue);
+  background-color: var(--surface-high);
+}
+
+.obsidian-card-active {
+  border-left: 3px solid var(--primary-blue);
+  background-color: var(--surface-high);
+}
+
+/* High-Density Compact Tables */
+.obsidian-table-container {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-low);
+}
+
+.obsidian-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.obsidian-table th {
+  background-color: var(--surface-high);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.obsidian-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-color);
+  height: 34px;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.obsidian-table tr:last-child td {
+  border-bottom: none;
+}
+
+.obsidian-table tr:hover td {
+  background-color: rgba(88, 166, 255, 0.05);
+}
+
+/* Status Badges & Pills */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.status-dot-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.status-pill-leader {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--primary-blue);
+  border-color: rgba(88, 166, 255, 0.3);
+}
+.status-pill-leader .status-dot { background: var(--primary-blue); }
+
+.status-pill-follower {
+  background: rgba(137, 87, 229, 0.15);
+  color: var(--secondary-light);
+  border-color: rgba(137, 87, 229, 0.3);
+}
+.status-pill-follower .status-dot { background: var(--secondary-purple); }
+
+.status-pill-candidate {
+  background: rgba(255, 186, 66, 0.15);
+  color: var(--amber-warning);
+  border-color: rgba(255, 186, 66, 0.3);
+}
+.status-pill-candidate .status-dot { background: var(--amber-warning); }
+
+.status-pill-down {
+  background: rgba(255, 180, 171, 0.15);
+  color: var(--red-error);
+  border-color: rgba(255, 180, 171, 0.3);
+}
+.status-pill-down .status-dot { background: var(--red-error); }
+
+.status-pill-healthy {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--green-success);
+  border-color: rgba(74, 222, 128, 0.3);
+}
+.status-pill-healthy .status-dot { background: var(--green-success); }
+
+/* Buttons */
+.btn-obsidian {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  outline: none;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.btn-primary {
+  background-color: var(--primary-blue);
+  color: #001c38;
+  font-weight: 600;
+}
+.btn-primary:hover {
+  background-color: var(--primary-dim);
+}
+
+.btn-secondary {
+  background-color: var(--surface-high);
+  color: var(--text-main);
+  border-color: var(--border-color);
+}
+.btn-secondary:hover {
+  background-color: var(--surface-bright);
+  border-color: var(--border-strong);
+}
+
+.btn-danger {
+  background-color: var(--red-container);
+  color: var(--red-error);
+  border-color: rgba(255, 180, 171, 0.3);
+}
+.btn-danger:hover {
+  background-color: #ba1a1a;
+  color: #fff;
+}
+
+.btn-ghost {
+  background-color: transparent;
+  color: var(--text-muted);
+}
+.btn-ghost:hover {
+  background-color: var(--surface-high);
+  color: var(--text-main);
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* Code & Terminal Blocks */
+.terminal-block {
+  background-color: var(--surface-lowest);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-none);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-main);
+  padding: var(--space-md);
+  overflow-x: auto;
+}
+
+/* Metric Display Blocks */
+.metric-box {
+  background-color: var(--surface-low);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-value {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(11, 14, 20, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background-color: var(--surface-base);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  width: 90%;
+  max-width: 650px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: var(--space-lg);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+/* Skeleton Loading */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-high) 25%,
+    var(--surface-bright) 50%,
+    var(--surface-high) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes skeleton-loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+}

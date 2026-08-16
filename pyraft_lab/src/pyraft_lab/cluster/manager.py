@@ -35,6 +35,7 @@ from pyraft_lab.observability.metrics import LiveMetrics
 from pyraft_lab.observability.tracer import Tracer
 from pyraft_lab.raft.node import RaftNode
 from pyraft_lab.raft.persistence import WriteAheadLog
+from pyraft_lab.raft.snapshot import SnapshotStore
 
 
 class ClusterError(Exception):
@@ -54,6 +55,7 @@ class NodeManager:
     wal_path: Path | None
     election_timeout_range: tuple[float, float]
     heartbeat_interval: float
+    snapshot_dir: Path | None = None
 
     node: RaftNode | None = field(default=None, init=False)
     running: bool = field(default=False, init=False)
@@ -64,6 +66,7 @@ class NodeManager:
             if self.wal_path is not None
             else None
         )
+        snapshots = SnapshotStore(self.snapshot_dir) if self.snapshot_dir is not None else None
         return RaftNode(
             node_id=self.node_id,
             peers=self.peer_ids,
@@ -72,6 +75,7 @@ class NodeManager:
             clock=self.clock,
             tracer=self.tracer,
             wal=wal,
+            snapshots=snapshots,
             election_timeout_range=self.election_timeout_range,
             heartbeat_interval=self.heartbeat_interval,
         )
@@ -99,9 +103,19 @@ class NodeManager:
         can prove a restart is real).
         """
         await self.stop(crashed=True)
-        if self.wal_path is not None:
+        return self.recover()
+
+    def recover(self) -> RaftNode:
+        """Come back from a crash - from disk alone if this member is persistent.
+
+        The second half of :meth:`restart`, separated so a member can be left down for
+        a while and brought back later, which is what a fault-injection session does
+        and what a single ``restart`` cannot express.
+        """
+        if self.running:
+            raise ClusterError(f"{self.node_id} is already running")
+        if self.wal_path is not None or self.node is None:
             self.node = self._build()
-        assert self.node is not None
         self.node.start()
         self.running = True
         return self.node
@@ -154,6 +168,9 @@ class ClusterManager:
                 wal_path=(config.data_dir / f"{node_id}.wal") if config.data_dir else None,
                 election_timeout_range=config.election_timeout_range,
                 heartbeat_interval=config.heartbeat_interval,
+                snapshot_dir=(
+                    (config.data_dir / f"{node_id}-snapshots") if config.data_dir else None
+                ),
             )
             for index, node_id in enumerate(ids)
         }
@@ -209,6 +226,22 @@ class ClusterManager:
             timeout=self.config.election_timeout_range[1] * 4,
         )
         return node
+
+    async def crash_node(self, node_id: NodeId) -> None:
+        """Take one member down and leave it down. No wait for a leader: losing one
+        may well be what the caller is trying to observe."""
+        manager = self.nodes.get(node_id)
+        if manager is None:
+            raise ClusterError(f"no such node: {node_id!r}")
+        if not manager.running:
+            raise ClusterError(f"{node_id} is already down")
+        await manager.stop(crashed=True)
+
+    def recover_node(self, node_id: NodeId) -> RaftNode:
+        manager = self.nodes.get(node_id)
+        if manager is None:
+            raise ClusterError(f"no such node: {node_id!r}")
+        return manager.recover()
 
     # --- addressing a member ----------------------------------------------------------
 

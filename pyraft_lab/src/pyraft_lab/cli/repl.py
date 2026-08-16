@@ -333,6 +333,25 @@ async def _dispatch(manager: ClusterManager, verb: str, args: list[str]) -> str:
     return await handler(manager, args)
 
 
+async def execute_command(manager: ClusterManager, line: str) -> str:
+    """Run one REPL line against ``manager`` and return what it printed.
+
+    The seam a caller that is not a terminal - the HTTP API's console - drives the
+    session through, so a command typed in a browser and the same command typed at
+    ``pyraft-lab cluster start`` go through one implementation rather than two.
+    ``dashboard`` is excluded because it writes frames to a terminal over time rather
+    than returning one answer.
+    """
+    verb, args = parse_command(line)
+    if not verb:
+        return ""
+    if verb in ("exit", "quit"):
+        raise ReplCommandError("the cluster is stopped from the API, not with 'exit'")
+    if verb == "dashboard":
+        raise ReplCommandError("'dashboard' is a terminal view; the live cluster pages replace it")
+    return await _dispatch(manager, verb, args)
+
+
 # --- the loop: the only piece that touches real I/O -----------------------------------
 
 
