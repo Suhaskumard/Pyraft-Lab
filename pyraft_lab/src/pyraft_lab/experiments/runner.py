@@ -23,6 +23,7 @@ import asyncio
 import random
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from pyraft_lab import NodeId
@@ -48,6 +49,7 @@ from pyraft_lab.observability.metrics import LiveMetrics
 from pyraft_lab.observability.tracer import Tracer
 from pyraft_lab.raft.election import ELECTION_TIMEOUT_RANGE, HEARTBEAT_INTERVAL
 from pyraft_lab.raft.node import RaftNode
+from pyraft_lab.raft.persistence import WriteAheadLog
 from pyraft_lab.raft.state import Role
 
 CLIENT_TIMEOUT = 0.2
@@ -134,6 +136,10 @@ class RunResult:
     election_timeout_range: tuple[float, float] = ELECTION_TIMEOUT_RANGE
     heartbeat_interval: float = HEARTBEAT_INTERVAL
     client_timeout: float = CLIENT_TIMEOUT
+    persist: bool = False
+    """Whether this run built its nodes with a WAL (Phase 8's chaos campaign): a crash
+    then truly discards in-memory state and recovery rebuilds only from disk. Recorded
+    so a persisted run's manifest knows to reconstruct the same way on replay."""
 
     @property
     def surviving_log(self) -> list[Any]:
@@ -160,6 +166,7 @@ class ExperimentRunner:
         election_timeout_range: tuple[float, float] = ELECTION_TIMEOUT_RANGE,
         heartbeat_interval: float = HEARTBEAT_INTERVAL,
         client_timeout: float = CLIENT_TIMEOUT,
+        wal_dir: str | Path | None = None,
     ) -> None:
         self.scenario = scenario
         self.seed = scenario.seed if seed is None else seed
@@ -167,6 +174,9 @@ class ExperimentRunner:
         self._election_timeout_range = election_timeout_range
         self._heartbeat_interval = heartbeat_interval
         self._client_timeout = client_timeout
+        self._wal_dir = Path(wal_dir) if wal_dir is not None else None
+        if self._wal_dir is not None:
+            self._wal_dir.mkdir(parents=True, exist_ok=True)
 
         self.clock = VirtualClock()
         self.tracer = Tracer(self.clock)
@@ -189,16 +199,32 @@ class ExperimentRunner:
     def _build_cluster(self) -> None:
         ids = self.scenario.node_ids
         for index, node_id in enumerate(ids):
-            self.nodes[node_id] = RaftNode(
-                node_id=node_id,
-                peers=ids,
-                transport=self.network,
-                rng=random.Random(self.seed + index),
-                clock=self.clock,
-                tracer=self.tracer,
-                election_timeout_range=self._election_timeout_range,
-                heartbeat_interval=self._heartbeat_interval,
-            )
+            self.nodes[node_id] = self._new_node(node_id, ids, index)
+
+    def _new_node(self, node_id: NodeId, ids: list[NodeId], index: int) -> RaftNode:
+        """A node as it would be built fresh - used both at startup and, when this run
+        is persistent, to rebuild one from nothing but its WAL on recovery (see
+        ``_recover``). The ``rng`` is reseeded by the same ``seed + index`` formula
+        every time rather than continuing whatever stream the previous instance was
+        partway through, so a rebuild is a pure function of ``(seed, node_id)`` and
+        Phase 7 replay reproduces it exactly.
+        """
+        wal = (
+            WriteAheadLog(self._wal_dir / f"{node_id}.wal", node_id=node_id, sync=False)
+            if self._wal_dir is not None
+            else None
+        )
+        return RaftNode(
+            node_id=node_id,
+            peers=ids,
+            transport=self.network,
+            rng=random.Random(self.seed + index),
+            clock=self.clock,
+            tracer=self.tracer,
+            wal=wal,
+            election_timeout_range=self._election_timeout_range,
+            heartbeat_interval=self._heartbeat_interval,
+        )
 
     def _build_clients(self) -> list[Workload]:
         ids = self.scenario.node_ids
@@ -371,6 +397,14 @@ class ExperimentRunner:
         named = self._resolve(step.target, allow_missing=True)
         target = named if named in self._down else self._down[0]
         self._down.remove(target)
+
+        if self._wal_dir is not None:
+            # A persistent run's crash is a real one: this node's in-memory object is
+            # discarded here, and the replacement is built by ``_new_node`` from
+            # nothing but what its WAL actually persisted - see docs/architecture.md P8.
+            ids = self.scenario.node_ids
+            self.nodes[target] = self._new_node(target, ids, ids.index(target))
+
         self.nodes[target].start()
         return target, ""
 
@@ -447,6 +481,7 @@ class ExperimentRunner:
             election_timeout_range=self._election_timeout_range,
             heartbeat_interval=self._heartbeat_interval,
             client_timeout=self._client_timeout,
+            persist=self._wal_dir is not None,
         )
 
     def _snapshot(self, node_id: NodeId) -> NodeSnapshot:

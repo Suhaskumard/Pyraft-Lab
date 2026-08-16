@@ -25,7 +25,7 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 5 — Laboratory core | **done** — scenario runner, fault timelines, metrics, linearizability |
 | 6 — Persistence & snapshots | **done** — checksummed WAL, crash recovery, snapshots + compaction |
 | 7 — Deterministic replay | **done** — run manifests, `pyraft-lab replay`, bit-identical trace diffing |
-| 8 — Stress & chaos | not started |
+| 8 — Stress & chaos | **done** — auto-generated stress campaigns, randomized chaos campaigns, both replay-able |
 | 9 — Cluster controller & CLI | not started |
 | 10 — Benchmarking | not started |
 | 11 — Dashboard (if time remains) | not started |
@@ -57,6 +57,8 @@ pyraft-lab inspect-wal <path>          # validate a WAL, print what a restart re
 pyraft-lab inspect-wal <path> --repair # discard from the first corrupt record onward
 pyraft-lab inspect-snapshot <path>     # verify and print a snapshot's metadata
 pyraft-lab replay <run_id>             # re-run a persisted run and diff its trace
+pyraft-lab stress --nodes N --duration Ns  # N auto-generated fault combinations, stress-report.json
+pyraft-lab chaos --nodes N --duration Ns   # randomized fault sequences, a CHAOS TEST REPORT
 ```
 
 The cluster and experiment commands (`start`, `put`, `get`, `status`, `show-log`,
@@ -100,6 +102,31 @@ node.take_snapshot()  # by hand, or automatically once SnapshotPolicy's threshol
 
 A crash is recovered by building the same `RaftNode` again against the same files.
 `pyraft-lab inspect-wal` and `inspect-snapshot` read either one without a node at all.
+
+## Stress & chaos campaigns
+
+Both are many-trial drivers over the same `ExperimentRunner`, and both persist a
+failing trial so its `run_id` is directly usable with `pyraft-lab replay`.
+
+`stress` picks one entry per trial from a bounded catalog of fault archetypes (crash
+the leader, crash a follower, isolate a minority or the leader alone, a latency spike,
+a packet-loss burst, churn, or a combination), cycled by trial index so N trials sweep
+every archetype. Trials run in memory — coverage across many cheap trials is the point.
+
+```bash
+pyraft-lab stress --nodes 5 --duration 20s --trials 40
+# stress-report.json: trials/passed/failed/data-loss/linearizability/recovery percentiles
+```
+
+`chaos` runs one open-ended randomized fault sequence per trial — no catalog, no
+attempt to keep a quorum alive — and checks a single invariant every time: **committed
+data is never silently lost**. Every trial runs with a real per-node WAL, so a crash
+truly discards a node's in-memory state and recovery rebuilds it from nothing but disk.
+
+```bash
+pyraft-lab chaos --nodes 5 --duration 20s --trials 40
+# prints a CHAOS TEST REPORT and writes chaos-report.json
+```
 
 ## Tracing a run
 

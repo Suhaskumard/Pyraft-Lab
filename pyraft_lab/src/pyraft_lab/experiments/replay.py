@@ -23,6 +23,7 @@ question "does this reproduce", and a ``ReplayReport`` says so precisely: not ju
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,7 @@ def manifest_of(result: RunResult) -> RunManifest:
         client_timeout=result.client_timeout,
         duration=result.duration,
         scenario_source=str(scenario.source) if scenario.source else None,
+        persist=result.persist,
     )
 
 
@@ -208,15 +210,35 @@ async def replay_run(results_dir: str | Path, run_id: str) -> tuple[ReplayReport
     original_events = load_events(results_dir, run_id)
 
     scenario = Scenario.from_dict(manifest.scenario)
-    runner = ExperimentRunner(
-        scenario,
-        seed=manifest.seed,
-        run_id=manifest.run_id,
-        election_timeout_range=manifest.election_timeout_range,
-        heartbeat_interval=manifest.heartbeat_interval,
-        client_timeout=manifest.client_timeout,
-    )
-    result = await runner.run()
+
+    if manifest.persist:
+        # A persisted run's crashes really discarded state and recovered from a WAL
+        # (Phase 8's chaos campaign); replaying it in cheap in-memory mode would skip
+        # exactly the mechanism a failing trial exists to exercise, and could "match"
+        # for the wrong reason. A fresh temp directory reproduces the same rebuild
+        # deterministically - the WAL's *content*, not the directory, is what has to
+        # match, and content is rederived from the identical seed and fault timeline.
+        with tempfile.TemporaryDirectory(prefix=f"replay-{run_id}-wal-") as wal_dir:
+            runner = ExperimentRunner(
+                scenario,
+                seed=manifest.seed,
+                run_id=manifest.run_id,
+                election_timeout_range=manifest.election_timeout_range,
+                heartbeat_interval=manifest.heartbeat_interval,
+                client_timeout=manifest.client_timeout,
+                wal_dir=wal_dir,
+            )
+            result = await runner.run()
+    else:
+        runner = ExperimentRunner(
+            scenario,
+            seed=manifest.seed,
+            run_id=manifest.run_id,
+            election_timeout_range=manifest.election_timeout_range,
+            heartbeat_interval=manifest.heartbeat_interval,
+            client_timeout=manifest.client_timeout,
+        )
+        result = await runner.run()
 
     comparison = _compare(run_id, original_events, result.events)
     return comparison, result

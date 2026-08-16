@@ -108,9 +108,42 @@ class RaftNode:
         self._tally: VoteTally | None = None
         self.leader_id: NodeId | None = None
 
+        # When the next heartbeat is due, while leading. Set on becoming leader and
+        # advanced only when a heartbeat actually fires - never by the mere arrival of
+        # some other message. See ``_run``'s docstring note on why this cannot just be
+        # recomputed as "now + heartbeat_interval" at the top of the loop.
+        self._next_heartbeat_at = 0.0
+
         # Highest log index currently in flight to each peer. Figure 2's reply carries
         # no index, so the leader has to remember what it sent to interpret a success.
         self._inflight: dict[NodeId, int] = {}
+
+        # When an AppendEntries to a peer was sent and has not yet been answered.
+        # Because a reply carries no index (D4), this value is only interpretable while
+        # at most one request to a given peer is outstanding - two in flight at once
+        # makes it ambiguous which one a given reply is *for*, and blindly crediting
+        # the later (larger) one to an earlier reply can advance matchIndex past what
+        # that peer has actually durably appended (see docs/architecture.md P8). So
+        # ``_replicate_to`` skips a peer that is already awaiting a reply, and this is
+        # cleared only when that reply arrives - or after ``_reply_timeout`` with no
+        # reply at all, since a genuinely lost request or reply must not stall this
+        # peer's replication forever.
+        self._awaiting_reply: dict[NodeId, float] = {}
+        # Exactly one heartbeat_interval, not several: this only needs to be long
+        # enough that the handful of reactive resends a single burst of client writes
+        # can trigger (submit, then _on_append_reply's "still behind" follow-up) land
+        # within one window and so are seen as "one request in flight", not several
+        # overlapping ones - the ambiguity this guard exists to prevent. Any longer
+        # actively hurts: retries would then happen less often than the heartbeat tick
+        # that used to (harmlessly) resend unconditionally, which under real packet
+        # loss means fewer chances to get a message through before a peer's own
+        # election timeout expires - trading the correctness bug for a liveness one.
+        # heartbeat_interval is already documented as "comfortably under the minimum
+        # election timeout" (raft/election.py), so anchoring to it - rather than to
+        # election_timeout_range, which fast-election configurations narrow right down
+        # towards this same timescale - keeps this timeout safely clear of that floor
+        # regardless of how the two ranges relate to each other in a given setup.
+        self._reply_timeout = self._heartbeat_interval
 
         # Log index -> the client waiting on it. A write is answered only once its entry
         # has committed and applied, never on being appended.
@@ -335,6 +368,22 @@ class RaftNode:
     # --- the loop ----------------------------------------------------------------
 
     async def _run(self) -> None:
+        """The reactor loop: wait for the next message or the next deadline, whichever
+        comes first.
+
+        A leader's wait target is ``_next_heartbeat_at``, not a fresh ``now() +
+        heartbeat_interval`` computed here every time round - that recompute was once
+        the whole bug: it made the deadline recede every time *any* message arrived,
+        from any source, for any reason. Under real traffic (client requests,
+        replication acks flowing back from followers) some message is close to always
+        arriving within one heartbeat_interval, so the timeout branch that calls
+        ``_broadcast_heartbeat`` could go unreached indefinitely - starving a follower
+        that happens to already be caught up (nothing new to reactively push to it) of
+        heartbeats altogether, until it times out and starts an election nobody
+        expected. ``_next_heartbeat_at`` only ever moves forward when a heartbeat
+        actually goes out (here, and in ``_win_election``), so it is a real deadline
+        rather than one perpetually pushed out of reach.
+        """
         assert self._inbox is not None
         deadline = self._next_election_deadline()
 
@@ -342,25 +391,39 @@ class RaftNode:
             if self.state.role is Role.LEADER:
                 # A leader never stands for election; it only needs to wake up often
                 # enough to heartbeat.
-                deadline = self._now() + self._heartbeat_interval
+                deadline = self._next_heartbeat_at
 
             envelope = await self._wait_for_message(deadline)
 
             if envelope is None:
                 if self.state.role is Role.LEADER:
                     self._broadcast_heartbeat()
+                    self._next_heartbeat_at = self._now() + self._heartbeat_interval
                 else:
                     self._start_election()
                     deadline = self._next_election_deadline()
                 continue
 
+            was_leader = self.state.role is Role.LEADER
             reset_timer = self._dispatch(envelope.src, envelope.body)
             # Catches a step-down that produced no event of its own - a *reply* carrying
             # a higher term. Every other path reports through ``_trace``, which checks
             # the term itself before emitting.
             self._check_term_change()
 
-            if reset_timer:
+            # A reply (vote or append) never earns a reset by _dispatch's own rule -
+            # replies aren't proof of a current leader, so a plain follower is right to
+            # ignore them. But a node that *was* leader a moment ago and just stepped
+            # down (observe_term, inside handling this very reply) is a different case:
+            # its deadline is still the leader's ~heartbeat_interval-away recompute from
+            # the top of this loop, not a real election timeout. Left alone, that stale,
+            # far-too-short deadline would let a freshly-demoted leader race back into
+            # candidacy well ahead of every other node's honestly-randomized timeout -
+            # an unfair head start with nothing in the paper to justify it, and the
+            # mechanism behind the runaway re-election storms this fixes (see
+            # docs/architecture.md P8).
+            stepped_down_from_leader = was_leader and self.state.role is not Role.LEADER
+            if reset_timer or stepped_down_from_leader:
                 deadline = self._next_election_deadline()
 
             # Both sides of replication can move commitIndex - a follower learns it from
@@ -527,8 +590,25 @@ class RaftNode:
     def _on_append_reply(self, peer: NodeId, reply: AppendEntriesReply) -> None:
         if self.state.observe_term(reply.term):
             self._inflight.clear()
+            self._awaiting_reply.clear()
             return
 
+        # A reply to a request sent while we were still leader can arrive after we have
+        # since stepped down (observed a higher term via some other message). handle_
+        # append_reply already no-ops in that case, but without this check the retry
+        # logic below would not: it would send more AppendEntries - carrying our
+        # updated term - as if we were still leader, which a peer has no way to tell
+        # apart from a genuine leader's traffic. Left unchecked this is what turns one
+        # step-down into a cluster-wide election storm (docs/architecture.md P8).
+        if self.state.role is not Role.LEADER:
+            return
+
+        # This reply is - by the single-in-flight invariant _replicate_to maintains -
+        # unambiguously the answer to the one request we had outstanding to this peer,
+        # so _inflight[peer] is safe to interpret as what it confirms. Cleared before
+        # acting on it so a retry decided below is free to send immediately rather than
+        # being skipped as "already awaiting a reply".
+        self._awaiting_reply.pop(peer, None)
         handle_append_reply(self.state, peer, reply, self._inflight.get(peer, 0))
 
         if reply.success:
@@ -696,6 +776,7 @@ class RaftNode:
         self.leader_id = self.node_id
         self._tally = None
         self._inflight.clear()
+        self._awaiting_reply.clear()
         self._last_heartbeat_ack.clear()
         self._trace(EventKind.LEADER_ELECTED, votes=votes, cluster_size=self.cluster_size)
 
@@ -712,6 +793,7 @@ class RaftNode:
         self._apply_committed()
 
         self._broadcast_heartbeat()
+        self._next_heartbeat_at = self._now() + self._heartbeat_interval
 
     def _broadcast_heartbeat(self) -> None:
         """Push each follower whatever it is missing (paper §5.3).
@@ -723,8 +805,26 @@ class RaftNode:
             self._replicate_to(peer)
 
     def _replicate_to(self, peer: NodeId) -> None:
+        """Send ``peer`` whatever it is missing - unless one is already in flight.
+
+        At most one outstanding request per peer, always: with two in flight, a reply
+        carrying no index (Figure 2, D4) cannot say which of them it is answering, and
+        crediting it to whichever was sent *last* - the only thing ``_inflight`` can
+        remember - can advance ``matchIndex`` past what the peer has actually durably
+        appended if that later request (or its reply) is the one that gets lost. A
+        timeout, not a reply, is what releases a peer stuck here: a genuinely lost
+        request or reply must not stall this peer's replication forever, and it is
+        fine to skip ahead to whatever the log looks like by the time we retry - the
+        next reply is what will correctly advance matchIndex to wherever it now
+        applies.
+        """
+        pending_since = self._awaiting_reply.get(peer)
+        if pending_since is not None and self._now() - pending_since < self._reply_timeout:
+            return
+
         request = build_append_entries(self.state, peer)
         self._inflight[peer] = request.prev_log_index + len(request.entries)
+        self._awaiting_reply[peer] = self._now()
         self._trace(
             EventKind.APPEND_ENTRIES_SENT,
             peer=peer,

@@ -52,6 +52,11 @@ class RunManifest:
     duration: float
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     scenario_source: str | None = None
+    persist: bool = False
+    """Whether the run was built with a WAL per node (Phase 8's chaos campaign), so a
+    crash truly discarded state and recovery rebuilt from disk alone. A replay has to
+    reconstruct the same way, or it would "pass" by skipping the exact mechanism a
+    failing chaos trial exists to exercise."""
     version: int = MANIFEST_VERSION
 
     @property
@@ -70,6 +75,7 @@ class RunManifest:
             "heartbeat_interval": self.heartbeat_interval,
             "client_timeout": self.client_timeout,
             "duration": self.duration,
+            "persist": self.persist,
         }
 
     @classmethod
@@ -91,6 +97,7 @@ class RunManifest:
                 duration=float(data["duration"]),
                 created_at=str(data.get("created_at", "")),
                 scenario_source=data.get("scenario_source"),
+                persist=bool(data.get("persist", False)),
                 version=version,
             )
         except ManifestError:

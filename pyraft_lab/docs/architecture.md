@@ -487,6 +487,201 @@ Phase 7 needed a scenario to run start-to-finish reliably enough to replay, twic
 test. Recorded here because "replay was the thing that finally noticed" is itself worth
 knowing the next time a laboratory run behaves strangely for no visible reason.
 
+### P8 — four election/replication bugs, found by chaos testing and fixed here
+
+Not designed in - found. The first chaos sweep (base seed 8, 15 trials, 5 nodes)
+reported real data loss on trial 9: a client-acknowledged write vanished from every
+node's log by the end of the run, with the trace bit-identical on replay. Chasing it
+down turned up four separate, pre-existing bugs in `raft/node.py`'s timer and reply
+handling - none of them specific to WAL persistence, crashes, or partitions. The
+minimal repro for the worst of the first three needed no fault at all: `pyraft-lab
+stress`'s own `baseline.yaml` scenario (30s, 3 nodes, zero faults, `expected:
+availability: 1.0`) was failing it before this fix, at 120 term changes and 0.996
+availability - nothing before Phase 8 had ever actually *run* that scenario
+end-to-end and checked its `expected:` block against a real execution, since the
+CLI's `run`/`stress`/`chaos` commands did not exist until this phase. All seven
+shipped scenarios in `scenarios/*.yaml` now pass their `expected:` block for the
+first time as a direct result of these fixes.
+
+**1. A stepped-down leader kept acting like one.** `_on_append_reply` called
+`handle_append_reply` (which already correctly no-ops when `state.role is not
+Role.LEADER`, `replication.py:100`) but then unconditionally acted on `reply.success`
+regardless of that check - retrying via `_replicate_to` even after this node had
+stepped down (via `observe_term`, triggered by processing this very reply). A former
+leader would keep sending `AppendEntries` carrying its now-current term, which peers
+have no way to distinguish from a genuine leader's traffic. Fixed by adding the same
+`role is not LEADER` guard `handle_append_entries` already had, right after the
+`observe_term` early-return in `_on_append_reply`.
+
+**2. A demoted leader inherited an unfairly short deadline.** `_run`'s loop only
+resets `deadline` to a fresh, properly-randomized election timeout when `_dispatch`
+returns `True` - and neither reply case (`RequestVoteReply`, `AppendEntriesReply`)
+ever does, by the paper's own rule that a reply is not proof of a current leader.
+That rule is right for an ordinary follower, but wrong for the one case a reply
+handler can also cause: *this node was leader a moment ago and just stepped down*
+inside handling this reply. Its `deadline` was still the leader's `now() +
+heartbeat_interval` recompute from the top of this same loop iteration - roughly 50 ms
+out, not a real 150-300 ms election timeout. A freshly-demoted leader would then race
+back into candidacy well ahead of every other node's honest, randomized wait, winning
+disproportionately often and producing exactly the "one node keeps winning, gets
+deposed, wins again" oscillation the first chaos trace showed. Fixed: `_run` now also
+treats *stepping down from leader as a side effect of this dispatch* as earning a
+fresh election deadline, the same as `reset_timer` does.
+
+**3. The leader's own heartbeat could starve under real traffic.** The worst of the
+three, and the one that broke `baseline.yaml` with zero faults involved. `_run`
+recomputed a leader's heartbeat deadline as `now() + heartbeat_interval` at the *top
+of every loop iteration* - not anchored to when a heartbeat last actually went out.
+Under any sustained traffic (client requests, replication acks flowing back from
+followers - exactly what an active workload produces), some message arrives well
+inside every 50 ms window, so the timeout branch that calls `_broadcast_heartbeat`
+could go unreached for arbitrarily long. A follower that happened to already be caught
+up - nothing new to reactively push to it via `submit`'s or `_on_append_reply`'s
+"still behind" paths - could then go without hearing from its leader indefinitely,
+time out, and start an election nobody else expected. Fixed with a `_next_heartbeat_at`
+instance field that only ever advances when a heartbeat is actually broadcast (in
+`_win_election` and in `_run`'s timeout branch), never by the mere arrival of
+unrelated traffic - turning it into a real deadline instead of one perpetually pushed
+out of reach.
+
+**Why this survived seven phases of hand-written scenarios.** Every hand-written
+scenario's fault timeline (`churn.yaml` and friends) is authored to "never [take] enough
+[nodes] at once to lose quorum" and to heal or recover promptly - see their own
+comments. That discipline is exactly what kept a demoted leader's unfair re-election
+(#2) and reply-driven retries (#1) from mattering: with faults spaced out and quorum
+never seriously contested, elections were rare enough that a slightly-unfair timeout
+essentially never got exercised. Bug #3 needed sustained traffic and enough real time
+for the "every message arrives inside 50 ms" condition to hold continuously, which a
+30-second scenario with a steady `puts_per_sec` workload provides but nothing in
+Phases 1-7's unit-level election/replication tests does - those construct a handful of
+messages by hand and never run a real timer loop under load for long enough. Chaos's
+open-ended random walk of faults, run for many trials, was the first thing to combine
+"long enough," "busy enough," and "adversarial enough" all at once - which is the
+whole reason a chaos campaign exists rather than only ever running curated scenarios.
+
+### P8 — open issue: a possible 5th replication-safety bug, found but not yet fixed
+
+Flagged rather than fixed, on a deliberate call to stop chasing an increasingly rare
+case rather than open-endedly widen this phase's scope. **Exact repro:** `ChaosConfig
+(nodes=5, trial_duration=12.0, trials=15, base_seed=8)`, trial index 10 (`chaos.
+trial_seed(8, 10) == 16000034`) - reconstructible any time via `chaos._run_trial
+(config, 10)`, or replayed straight from a persisted run once one exists (`pyraft-lab
+chaos --nodes 5 --duration 12s --trials 15 --seed 8`, then `pyraft-lab replay
+<the trial-10 run_id>`).
+
+**What was confirmed before stopping:** the trial's client is told a write (`k2 =
+"client1-24"`) succeeded; by the trial's end that entry is gone not just from every
+*alive* node (the gap the broadened `_surviving_log_all_nodes`/`_divergent_nodes_all`
+below exists to close) but from a node that was crashed-then-still-down at teardown
+too - genuinely absent everywhere except one straggler whose divergent copy is itself
+proof something went wrong, not evidence of safety. Instrumenting `advance_commit_index`
+directly showed the leader (n3) recording `match_index = {n1: 27, n2: 27, n4: 26, n5:
+3}` at the moment it committed index 27 - a textbook-valid 3-of-5 majority *by its own
+bookkeeping*. But n2's log does not hold that entry by the run's end. Two explanations
+remain open, and telling them apart needs tracing n2's actual `RaftLog` mutations
+across the whole trial (not just its start/end state, the way the first four bugs
+were each pinned down):
+
+1. `match_index[n2] = 27` was itself wrong - a residual case of the same
+   mis-crediting family as the fourth bug above, not fully closed by the single-
+   in-flight guard (`_replicate_to`'s `_awaiting_reply`/`_reply_timeout`). Plausible:
+   this trial stacks nine faults, including packet loss and repeated crash/recover
+   cycles, on a five-node cluster within twelve seconds - considerably more
+   adversarial than anything the fourth bug's own repro needed.
+2. `match_index[n2] = 27` was accurate at the time, and a *later* leader won an
+   election it should not have been able to win with a log that did not include
+   index 27 - which would point at `raft/rpc.py`'s `handle_request_vote` or
+   `raft/log.py`'s `candidate_log_is_up_to_date` instead, a different and more
+   fundamental component than anything touched by this phase's other four fixes.
+
+Whichever it is, it is real and worth fixing - just not something to chase further
+within Phase 8's scope tonight. `tests/test_chaos.py`'s slow fuller-sweep test uses a
+different base seed for exactly this reason (documented at that test), so the default
+regression suite stays green while this stays open and reproducible on demand.
+
+### P8 — chaos gets real WAL-backed crash/recovery; stress does not
+
+**Decision:** `ExperimentRunner` gains one opt-in constructor argument, `wal_dir`.
+When set, every node is built with a `WriteAheadLog` under that directory, and a
+`recover` step replaces the crashed node's Python object outright with a brand-new
+`RaftNode` built against a freshly reopened `WriteAheadLog` on the same path — so its
+post-recovery state comes from nothing but what the WAL actually persisted. `chaos.py`
+always sets it; `stress.py` never does; every existing caller (Phase 5's scenario
+runner, Phase 7's replay of a non-persistent run, all pre-Phase-8 tests) passes
+neither, and is byte-for-byte unaffected.
+
+**Why:** this is the fulfillment of the forward reference P6 left standing — "the case
+where persistence changes the answer is a restart that keeps its state... it belongs
+to [Phase 8] rather than being pre-emptively bolted on here." Before this, a scenario's
+`crash` step was a pause: `RaftNode.stop()` then `.start()` on the *same* object, so
+in-memory log/term survived a "crash" untouched, and a chaos campaign built on that
+would only be testing Raft's in-memory majority-commit guarantee — never the on-disk
+recovery path Phase 6 built, which is exactly what a campaign whose invariant is
+"committed data is never silently lost" ought to be exercising. Stress stays in-memory
+deliberately: its job is coverage across many cheap trials, not durability, and disk
+I/O on every trial would buy it nothing it is chartered to test.
+
+### P8 — a trial's fault timeline is seeded from `(base_seed, trial_index)` alone
+
+**Decision:** `stress.trial_seed`/`chaos.trial_seed` each derive one integer from the
+campaign's base seed and a trial's index (different multipliers between the two
+modules, so a shared base seed can never accidentally line up the same trial for
+both), and every random choice a fault-kind builder or the chaos random-walk makes
+comes from the one `random.Random` seeded that way — nothing in either module calls
+the `random` module unseeded.
+
+**Why:** the same discipline Phase 5 already relies on (one seed feeds every random
+source in `ExperimentRunner`) extended one level up, to the campaign that decides
+*which* scenario each trial is. Without it, `--seed` on `stress`/`chaos` would control
+the run but not the fault selection, and a "failing trial" would not be a fixed,
+reproducible scenario at all — defeating the "seed becomes a replay-able regression
+case" property plan.md asks for.
+
+### P8 — a recovered WAL-backed node reseeds by formula, not by continuing a stream
+
+**Decision:** the rebuilt node's `rng` in `ExperimentRunner._new_node` is
+`random.Random(self.seed + index)` — the exact expression `_build_cluster` used when
+the cluster was first built — rather than whatever state the crashed node's `Random`
+instance happened to be in.
+
+**Why:** makes a rebuild a pure function of `(seed, node_id)`, independent of how many
+draws happened before the crash. That is what lets Phase 7 replay reproduce a
+persistent run exactly: replay reconstructs the runner from nothing but the manifest
+and re-triggers the same fault timeline at the same simulated times, so reseeding by
+formula on every rebuild — replay's included — always lands on the identical sequence.
+Continuing a stream would make that depend on exactly how much randomness the crashed
+incarnation had consumed, which is not itself part of the manifest.
+
+### P8 — the safety invariant is lost writes and log divergence, computed explicitly
+
+**Decision:** both campaigns compute `passed = not data_loss and not divergent_logs`
+by hand from `metrics.report()`'s `summary.data_loss`/`summary.divergent_logs` fields
+— never from `metrics.report()`'s own `document["passed"]`. Linearizability's verdict
+is still recorded per trial, but informationally only.
+
+**Why:** a real gap, found while wiring this up: `metrics.report()`'s `passed` folds in
+a scenario's `expected:` block and `data_loss`, but never looks at `divergent_logs` —
+so a run with diverged logs and no `expected:` block would report `passed: true`. It
+is backward-compatible to leave as is (no scenario written before Phase 8 has ever
+triggered log divergence), but it is exactly the kind of gap a chaos campaign exists to
+find, so both `stress._run_trial` and `chaos._run_trial` fold divergence in themselves
+rather than depend on the fix landing in `metrics.py`. Plan.md's invariant is also
+specifically about lost writes — a narrower, always-decidable question next to
+linearizability's occasional `UNPROVEN` — so gating a campaign's pass/fail on full
+linearizability would fail runs where nothing was actually lost.
+
+### P8 — a trial's WAL directory does not outlive the trial
+
+**Decision:** `chaos._run_trial` opens its `wal_dir` as a `tempfile.TemporaryDirectory`
+and lets it go when the trial ends, win or lose. Nothing about the raw WAL bytes is
+kept in `results/`, even for a failing trial.
+
+**Why:** replay already regenerates the same WAL content deterministically (the P8
+entry above), so keeping it on disk would grow `results/` for a reproducibility
+benefit replay already provides for free. A reviewer wanting the raw bytes for manual
+post-mortem debugging is a real, reasonable want that this does not serve — a
+`--keep-wal` escape hatch is a natural follow-up, not built here.
+
 ## Deferred
 
 - **InstallSnapshot.** Listed in the specification's RPC table but assigned no day, and

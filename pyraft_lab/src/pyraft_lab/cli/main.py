@@ -181,5 +181,99 @@ def replay(
         raise typer.Exit(1)
 
 
+@app.command()
+def stress(
+    nodes: Annotated[int, typer.Option("--nodes", help="Cluster size for every trial.")] = 3,
+    duration: Annotated[
+        str, typer.Option("--duration", help="Trial duration, e.g. '10s'.")
+    ] = "10s",
+    trials: Annotated[int, typer.Option("--trials", help="Number of trials to run.")] = 20,
+    seed: Annotated[int, typer.Option("--seed", help="Base seed every trial derives from.")] = 0,
+    results_dir: Annotated[
+        Path, typer.Option("--results-dir", help="Where a failing trial is persisted.")
+    ] = Path("results"),
+    report: Annotated[
+        Path, typer.Option("--report", help="Where to write the JSON report.")
+    ] = Path("stress-report.json"),
+) -> None:
+    """Auto-generated fault-combination trials over Phase 5's runner.
+
+    Each trial is one entry from a bounded catalog of fault archetypes (crash the
+    leader, crash a follower, isolate a minority or the leader alone, a latency spike,
+    a packet-loss burst, churn, or a combination), cycled by trial index so N trials
+    sweep every archetype. Trials run in memory. A failing trial is persisted via
+    Phase 7's machinery, so its run_id is directly replayable.
+    """
+    from pyraft_lab.experiments.scenario import ScenarioError, parse_duration
+    from pyraft_lab.experiments.stress import StressConfig, run_stress, write_report
+
+    if nodes < 1 or trials < 1:
+        typer.echo("--nodes and --trials must each be at least 1")
+        raise typer.Exit(2)
+    try:
+        trial_duration = parse_duration(duration, what="--duration")
+    except ScenarioError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(2) from exc
+
+    config = StressConfig(
+        nodes=nodes, trial_duration=trial_duration, trials=trials, base_seed=seed,
+        results_dir=results_dir,
+    )
+    campaign = asyncio.run(run_stress(config))
+    typer.echo(campaign.summary())
+    path = write_report(campaign, report)
+    typer.echo(f"\nwrote {path}")
+    if campaign.failed:
+        raise typer.Exit(1)
+
+
+@app.command()
+def chaos(
+    nodes: Annotated[int, typer.Option("--nodes", help="Cluster size for every trial.")] = 3,
+    duration: Annotated[
+        str, typer.Option("--duration", help="Trial duration, e.g. '10s'.")
+    ] = "10s",
+    trials: Annotated[int, typer.Option("--trials", help="Number of trials to run.")] = 20,
+    seed: Annotated[int, typer.Option("--seed", help="Base seed every trial derives from.")] = 0,
+    results_dir: Annotated[
+        Path, typer.Option("--results-dir", help="Where a failing trial is persisted.")
+    ] = Path("results"),
+    report: Annotated[
+        Path, typer.Option("--report", help="Where to write the JSON report.")
+    ] = Path("chaos-report.json"),
+) -> None:
+    """A randomized fault sequence per trial, checking one invariant every time:
+    committed data is never silently lost.
+
+    Unlike ``stress``, a chaos trial's timeline is an open-ended random walk with no
+    attempt to keep a quorum alive, and every trial runs with a real per-node WAL, so
+    a crash genuinely discards state and recovery rebuilds only from disk. A failing
+    trial is persisted and directly replayable.
+    """
+    from pyraft_lab.experiments.chaos import ChaosConfig, run_chaos, write_report
+    from pyraft_lab.experiments.scenario import ScenarioError, parse_duration
+
+    if nodes < 1 or trials < 1:
+        typer.echo("--nodes and --trials must each be at least 1")
+        raise typer.Exit(2)
+    try:
+        trial_duration = parse_duration(duration, what="--duration")
+    except ScenarioError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(2) from exc
+
+    config = ChaosConfig(
+        nodes=nodes, trial_duration=trial_duration, trials=trials, base_seed=seed,
+        results_dir=results_dir,
+    )
+    campaign = asyncio.run(run_chaos(config))
+    typer.echo(campaign.explain())
+    path = write_report(campaign, report)
+    typer.echo(f"\nwrote {path}")
+    if campaign.failed:
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
