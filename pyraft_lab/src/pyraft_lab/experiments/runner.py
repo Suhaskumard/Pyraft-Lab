@@ -462,9 +462,23 @@ class ExperimentRunner:
 
         for channel in self._channels:
             channel.close()
+
+        # Every still-up node gets a chance to release its transport registration and
+        # WAL handle even if an earlier one's stop() re-raises an unexpected error
+        # (RaftNode.stop's own contract, see its docstring) - an early return here
+        # would leave the rest of the cluster's file handles open, which on Windows
+        # then masks the real error behind an unrelated TemporaryDirectory cleanup
+        # PermissionError the next time this scenario's wal_dir is torn down.
+        first_error: Exception | None = None
         for node_id, node in self.nodes.items():
             if node_id not in self._down:
-                await node.stop(crashed=False)
+                try:
+                    await node.stop(crashed=False)
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+        if first_error is not None:
+            raise first_error
 
         return RunResult(
             scenario=self.scenario,

@@ -17,3 +17,6 @@ results/*
 # WAL files written by running nodes
 *.wal
 data/
+
+# scripts/demo.py's own output
+demo-output/

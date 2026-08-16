@@ -605,6 +605,14 @@ within Phase 8's scope tonight. `tests/test_chaos.py`'s slow fuller-sweep test u
 different base seed for exactly this reason (documented at that test), so the default
 regression suite stays green while this stays open and reproducible on demand.
 
+Still open as of P12: a Phase 12 validation run (`pyraft-lab chaos --nodes 5 --duration
+15s --trials 20 --seed 0`) hit what is very likely the same family, this time reaching
+`commit_index > log.last_index` hard enough to raise rather than only losing data
+silently. P12 fixed that crash's secondary damage (a node crashing this way used to
+leak its WAL handle and, on Windows, mask its own traceback behind an unrelated
+`PermissionError`) without touching this section's root cause, which remains exactly
+as open as it was at the end of Phase 8.
+
 ### P8 — chaos gets real WAL-backed crash/recovery; stress does not
 
 **Decision:** `ExperimentRunner` gains one opt-in constructor argument, `wal_dir`.
@@ -1003,6 +1011,73 @@ Ctrl+C delivery) — and a dashboard that garbles its own screen on an unsupport
 terminal has no fallback path. A scrolling log of full frames has no such failure
 mode, at the modest cost of not overwriting in place; a future `--clear` flag gated on
 a detected capability is a natural follow-up, not built now.
+
+### P12 — the directory reorganization plan.md promised was already done
+
+**Decision:** no files moved for this phase. `src/pyraft_lab/` already matches
+plan.md's "Target directory structure" table exactly - `experiments/`, `observability/`,
+`consistency/`, `cluster/`, `dashboard/` all exist at their target paths, and there is
+no leftover `lab/` stub anywhere in the tree.
+
+**Why:** plan.md said this would happen this way - "done incrementally per-phase
+rather than as a big-bang Day 14 change, since each phase above already creates its
+files in the target location" - and each phase from 4 through 11 did exactly that when
+it introduced its own package. Confirmed here rather than silently assumed: `find
+src -type d` was checked against the target tree by hand for this phase, specifically
+so "the reorg is finalized" is a verified fact in this document, not a repetition of a
+promise made eight phases ago.
+
+### P12 — the acceptance gap every prior phase's own notes named is closed
+
+**Decision:** `tests/test_integration.py` runs every file in `scenarios/*.yaml` through
+the real stack (`run_scenario` -> `metrics.report`) and asserts it passes its own
+`expected:` block, and chains the CLI commands (`init` -> `run --plot` -> `results` ->
+`replay`, and two independent `cluster start --data-dir` invocations sharing only disk)
+the way plan.md's pipeline describes rather than one command at a time.
+
+**Why:** this project's own architecture notes named this exact gap twice and moved on
+both times because closing it wasn't that phase's job. P8's entry says it in so many
+words: "nothing before Phase 8 had ever actually *run* that scenario end-to-end and
+checked its `expected:` block against a real execution" - true only of `baseline.yaml`,
+by accident, because chasing chaos's first failure happened to require running it.
+`test_scenario.py` has only ever checked that the other seven files *parse*. P12 is the
+phase whose job this is - "full integration suite" is its own line item in plan.md -
+so it is closed for all eight scenarios at once, as a permanent regression test rather
+than another one-off manual check.
+
+### P12 — a node's ``stop()`` cleans up in ``finally``, and teardown loops keep going
+
+**Decision:** `RaftNode.stop` moves its transport-unregister and `wal.close()` into a
+`finally` block around awaiting the (possibly exception-raising) task, rather than
+after it. `ExperimentRunner._teardown` and `LifecycleManager.shutdown` - the two
+places that stop every node in a cluster in a loop - now try every remaining node even
+after one's `stop()` raises, and re-raise only the first such error once every node has
+had its turn.
+
+**Why:** found running `pyraft-lab chaos` for this phase's own final validation pass,
+not designed in - the same way P8's four bugs and P10's livelock were found by actually
+running the laboratory rather than only reasoning about it. A trial hit the open
+issue P8 already named (`commit_index` moving past what a node's own log holds) hard
+enough to raise instead of merely losing data quietly, which is possible for the same
+reason P8's issue is possible - see that entry, not repeated here. That crash is a real,
+already-flagged Raft-level bug and this phase does not chase it further, for the same
+reason P8 didn't: it is core consensus code with 250+ tests staked on its current
+behavior, and root-causing it is protocol-level work, not a documentation phase's job.
+
+What *was* this phase's job: the crash's *secondary* damage. `RaftNode.stop`'s cleanup
+sat after `await self._task`, so a task that died on anything but `CancelledError`
+skipped it entirely - no `transport.unregister`, no `wal.close()`. On Windows, that
+left the crashed trial's WAL file still open when its `tempfile.TemporaryDirectory`
+tried to delete itself, which raised a second, unrelated `PermissionError` that
+buried the first exception's traceback under a confusing one about a locked file -
+exactly the kind of thing that makes a real bug look like tooling flakiness. Worse,
+`_teardown`'s and `shutdown`'s loops both aborted on that first raised `stop()`,
+never reaching the *other* nodes in the same cluster - so on a five-node trial, one
+node's crash could leave up to four more WAL handles open behind it. Fixed at both
+layers: cleanup that cannot be skipped by what the task died of, and a teardown loop
+that cannot be aborted by one node's stop() before every node has been asked to let go
+of its resources. Verified directly: the same failing trial and seed now raises exactly
+one clean `ValueError` with a normal traceback, no second exception, no locked file.
 
 ## Deferred
 

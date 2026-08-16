@@ -29,10 +29,14 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 9 — Cluster controller & CLI | **done** — live in-process cluster with an interactive session, `init`/`run`/`results` |
 | 10 — Benchmarking | **done** — `pyraft-lab benchmark` across node counts × packet loss, comparison graphs, `--plot` for any run |
 | 11 — Dashboard | **done** — `dashboard` command inside `cluster start`: live term/leader/health, per-node role, commit/applied/log length, election time, p99 latency, availability |
-| 12 — Docs & ship | not started |
+| 12 — Docs & ship | **done** — directory layout finalized, full integration suite, [technical report](docs/technical_report.md), narrated demo, `v0.1.0` |
 
 Nothing in this repo mocks a Raft mechanism or hard-codes a metric. Commands that
 cannot yet be answered honestly are absent from the CLI rather than stubbed.
+
+See [docs/technical_report.md](docs/technical_report.md) for the full write-up:
+benchmark numbers, every bug the laboratory actually found while building this, and
+what is knowingly left open.
 
 ## Install
 
@@ -47,6 +51,23 @@ pip install -e ".[dev]"
 ```bash
 pytest
 ```
+
+`tests/test_integration.py` is the full end-to-end suite: every file in `scenarios/`
+run for real against its own `expected:` block, and the CLI pipeline (`init` -> `run
+--plot` -> `results` -> `replay`, plus a WAL-backed cluster surviving across two
+independent `cluster start` invocations) chained the way a user actually would.
+
+## Demo
+
+```bash
+python scripts/demo.py
+```
+
+Runs the whole system end to end through the real CLI - scaffold a project, run three
+scenarios with plots, drive a live 3-node cluster interactively (put/get/status/
+topology/dashboard/restart), then compare cluster sizes under packet loss - and prints
+every command and its output as it goes. Output lands under `demo-output/` (not
+committed).
 
 ## CLI
 

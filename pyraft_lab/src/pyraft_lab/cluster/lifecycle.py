@@ -62,7 +62,20 @@ class LifecycleManager:
         Tolerates a manager that is already stopped, so a second call - or a REPL
         session tearing down after a restart was already mid-flight - is never an
         error.
+
+        Every manager gets a chance to stop even if an earlier one's ``stop()``
+        re-raises an unexpected error - see ``RaftNode.stop``'s docstring for why that
+        can happen - so one node's bug never leaves the rest of the cluster's WAL
+        handles open. The first such error is re-raised once every manager has had its
+        turn, rather than being swallowed.
         """
+        first_error: Exception | None = None
         for manager in managers:
             if manager.running:
-                await manager.stop(crashed=False)
+                try:
+                    await manager.stop(crashed=False)
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+        if first_error is not None:
+            raise first_error

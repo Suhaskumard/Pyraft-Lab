@@ -349,21 +349,31 @@ class RaftNode:
         stop and a crash are indistinguishable anyway (P4). ``crashed=False`` is for
         tearing a cluster down at the end of a run, where a crash event would put a
         fault in the trace that was really just the experiment ending.
+
+        Cleanup runs in ``finally`` and stopping still re-raises whatever the loop
+        died of: if ``_run`` exits on something other than ``CancelledError`` (an
+        unexpected bug, not a deliberate stop), that is a real finding and must not be
+        swallowed - but the transport registration and the WAL's file handle must be
+        released regardless, or a crashed task's exception leaks both, which on
+        Windows then turns a later ``TemporaryDirectory`` cleanup into a confusing
+        second ``PermissionError`` that has nothing to do with the actual bug.
         """
-        if self._task is not None:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
-        if self._inbox is not None:
-            self.transport.unregister(self.node_id, crashed=crashed)
-            self._inbox = None
-        if self.wal is not None:
-            # No fsync here on purpose: from the WAL's side stopping *is* the crash, and
-            # everything this node ever told anyone was synced before it said it. The
-            # file is only let go of so a stopped node holds no handle; the next write
-            # reopens it.
-            self.wal.close()
+        task, self._task = self._task, None
+        try:
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        finally:
+            if self._inbox is not None:
+                self.transport.unregister(self.node_id, crashed=crashed)
+                self._inbox = None
+            if self.wal is not None:
+                # No fsync here on purpose: from the WAL's side stopping *is* the crash,
+                # and everything this node ever told anyone was synced before it said
+                # it. The file is only let go of so a stopped node holds no handle; the
+                # next write reopens it.
+                self.wal.close()
 
     # --- the loop ----------------------------------------------------------------
 

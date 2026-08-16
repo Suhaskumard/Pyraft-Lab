@@ -341,12 +341,41 @@ As built:
   nothing currently tracks) that a "no new engine code" phase shouldn't grow just for
   this.
 
-### Phase 12 — Documentation, Final Architecture Pass, Ship (Days 14–15 + 2.0 item 15)
+### Phase 12 — Documentation, Final Architecture Pass, Ship (Days 14–15 + 2.0 item 15) — done
 
 Directory reorganization to the "Target directory structure" above is finalized — done
 incrementally per-phase rather than as a big-bang Day 14 change, since each phase above
 already creates its files in the target location. README, architecture doc, technical
 report, final 7+-scenario benchmark suite, full integration suite, demo, `v0.1.0` tag.
+
+As built:
+
+- Directory reorganization confirmed rather than redone — `src/pyraft_lab/` already
+  matched the target tree exactly, verified by hand for this phase (see
+  docs/architecture.md P12).
+- `tests/test_integration.py` (new): every shipped scenario run end to end against its
+  own `expected:` block (closing the gap P8's own notes named for `baseline.yaml`
+  alone), plus the full CLI pipeline (`init` → `run --plot` → `results` → `replay`)
+  and a WAL-backed cluster proven to survive across two genuinely independent
+  `cluster start` invocations. 11 new tests, 572 total.
+- [`docs/technical_report.md`](technical_report.md) (new): the Day 14 write-up —
+  architecture summary, every shipped scenario's real pass/fail numbers, the four bugs
+  and one open issue chaos testing actually found, real `pyraft-lab benchmark` numbers
+  across the full {3,5,7}×{0,5,10,20}% grid, and what remains deliberately deferred.
+- `scripts/demo.py` (new): one command that runs the whole system end to end through
+  the real CLI - `init`, three scenarios with plots, a scripted live-cluster session
+  (put/get/status/topology/dashboard/restart), and a benchmark sweep - and narrates
+  every step, so the transcripts in README and the technical report are proven live
+  rather than only asserted.
+- A real bug found running that validation, fixed here rather than passed silently
+  into the tag: `RaftNode.stop()` skipped its own cleanup (transport unregister, WAL
+  close) when its task died of anything other than a deliberate cancellation, and the
+  two places that stop every node in a cluster in a loop both gave up on the first
+  such failure rather than finishing the rest. See docs/architecture.md P12 for what
+  this fixed and, just as importantly, what it deliberately left open (the Raft-level
+  root cause is P8's already-flagged fifth issue, not new to this phase).
+- `v0.1.0` tagged once `pytest`, `ruff check`, and `ruff format --check` all pass clean
+  on this state.
 
 ## Explicitly out of scope (2.0 item 16, unchanged)
 

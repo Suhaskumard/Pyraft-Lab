@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyraft-lab"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "A Raft-based fault-tolerant distributed KV store with a deterministic fault-injection laboratory"
 readme = "README.md"
 license = { file = "LICENSE" }
