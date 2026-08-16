@@ -26,7 +26,7 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 6 — Persistence & snapshots | **done** — checksummed WAL, crash recovery, snapshots + compaction |
 | 7 — Deterministic replay | **done** — run manifests, `pyraft-lab replay`, bit-identical trace diffing |
 | 8 — Stress & chaos | **done** — auto-generated stress campaigns, randomized chaos campaigns, both replay-able |
-| 9 — Cluster controller & CLI | not started |
+| 9 — Cluster controller & CLI | **done** — live in-process cluster with an interactive session, `init`/`run`/`results` |
 | 10 — Benchmarking | not started |
 | 11 — Dashboard (if time remains) | not started |
 | 12 — Docs & ship | not started |
@@ -59,10 +59,11 @@ pyraft-lab inspect-snapshot <path>     # verify and print a snapshot's metadata
 pyraft-lab replay <run_id>             # re-run a persisted run and diff its trace
 pyraft-lab stress --nodes N --duration Ns  # N auto-generated fault combinations, stress-report.json
 pyraft-lab chaos --nodes N --duration Ns   # randomized fault sequences, a CHAOS TEST REPORT
+pyraft-lab init                        # write a default cluster.yaml; ensure scenarios/, results/
+pyraft-lab cluster start --nodes N     # build a real cluster; enter an interactive session
+pyraft-lab run --scenario <path>       # run one scenario file, persist it, print a summary
+pyraft-lab results                     # list persisted runs, newest first
 ```
-
-The cluster and experiment commands (`start`, `put`, `get`, `status`, `show-log`,
-`run --scenario ...`, `results`) arrive with their phases.
 
 ## Deterministic replay
 
@@ -126,6 +127,53 @@ truly discards a node's in-memory state and recovery rebuilds it from nothing bu
 ```bash
 pyraft-lab chaos --nodes 5 --duration 20s --trials 40
 # prints a CHAOS TEST REPORT and writes chaos-report.json
+```
+
+## Cluster controller
+
+`cluster start` builds a real, live cluster — real `RaftNode`s, real election timers,
+a `WallClock` — in this one process, and hands control to an interactive session.
+There is no daemon behind it: `put`/`get`/`status`/`show-log`/`node inspect`/
+`node logs`/`trace`/`restart`/`topology` are commands typed *inside* that session, not
+separate `pyraft-lab` invocations, because there is nothing else running for a later
+command to address (see [docs/architecture.md](docs/architecture.md) P9).
+
+```bash
+pyraft-lab init
+pyraft-lab cluster start --nodes 3
+```
+```
+pyraft-lab> put color blue
+ok: color = blue
+pyraft-lab> get color
+color = blue
+pyraft-lab> status
+status: HEALTHY
+term: 1   leader: n2
+pyraft-lab> topology
+node    alive  role       term  leader
+n1      True   follower   1     n2
+n2      True   leader     1     n2
+n3      True   follower   1     n2
+pyraft-lab> restart n2
+restarted n2
+pyraft-lab> exit
+```
+
+Pass `--data-dir` to persist every node's state to a WAL, so a `restart <id>` rebuilds
+that node purely from disk rather than reusing its in-memory object. `--config` reads
+a hand-edited `cluster.yaml` (written by `init`) for the settings that aren't CLI
+flags — election timeout range, heartbeat interval, client timeout.
+
+## Running a scenario
+
+`run` is `stress`/`chaos`'s single-scenario sibling: it runs one YAML file through the
+same `ExperimentRunner` and persists it through the same Phase 7 machinery, so its
+`run_id` works with `replay` immediately. `results` lists what has accumulated.
+
+```bash
+pyraft-lab run --scenario scenarios/leader_crash.yaml
+pyraft-lab results
 ```
 
 ## Tracing a run

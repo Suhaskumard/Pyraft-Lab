@@ -19,6 +19,12 @@ The transport sits between the cluster and everything below it deliberately: a R
 node has no idea whether its messages are crossing an honest bus or a simulated
 network dropping 30 % of them.
 
+Phase 9's `cluster/` package is an orchestration layer wrapped *around* CLIENTS +
+RAFT CLUSTER + TRANSPORT, not a fifth layer alongside them — `ClusterManager` builds
+and owns instances of exactly the same pieces this diagram already names (a
+`SimulatedNetwork`, a set of `RaftNode`s, a `KVClient`), for the CLI's interactive
+session rather than for a simulated experiment. See P9 below.
+
 ## Decisions
 
 Labels are the day the decision was made — `D8` is Day 8. Phases the 2.0 upgrade added
@@ -681,6 +687,130 @@ entry above), so keeping it on disk would grow `results/` for a reproducibility
 benefit replay already provides for free. A reviewer wanting the raw bytes for manual
 post-mortem debugging is a real, reasonable want that this does not serve — a
 `--keep-wal` escape hatch is a natural follow-up, not built here.
+
+### P9 — a live cluster is one process, not a daemon
+
+**Decision:** `pyraft-lab cluster start` builds a real, `WallClock`-driven cluster (real
+`RaftNode`s, a real `KVClient`) and hands control to an interactive REPL in the same
+process. There is no PID file, no socket, no background service — the cluster lives
+for exactly as long as the process that started it.
+
+**Why:** neither source document specifies how a cluster started by `cluster start`
+stays reachable for a later, separate `pyraft-lab put`/`status` invocation — no
+daemon/socket/PID-file mechanism appears anywhere in either PDF. The project's whole
+architecture already rejects real sockets for node-to-node traffic (D1: "no gRPC, no
+protobuf... a real kernel socket... is exactly the source of nondeterminism the lab
+exists to eliminate"), `pyproject.toml` carries no IPC/daemon dependency, and "real
+network deployment" is explicitly out of scope (2.0 item 16). Inventing a daemon model
+to fill a gap the specifications never actually describe would be new architecture,
+not implementation — the interactive-session reading costs nothing extra and stays
+inside the boundary the project already drew for itself. Confirmed with the user
+before building, given how much this decision shapes the rest of the CLI surface.
+
+### P9 — the REPL replaces the original plan's `put`/`get`/`status`/`show-log` as
+separate CLI invocations
+
+**Decision:** those four verbs, plus `node inspect`/`node logs`/`trace`/`restart`/
+`topology`, exist only as commands typed inside a `cluster start` session — never as
+their own top-level `pyraft-lab` subcommands. There is deliberately no top-level
+`cluster stop`/`cluster restart <node>`/`cluster status`/`cluster topology` either,
+even though 2.0 names them: a fresh CLI invocation under the one-process model has
+nothing persistent to address, and stubbing a command that can't answer honestly is
+exactly what `cli/main.py`'s own module docstring already rules out.
+
+**Why:** consistent with the P9 decision above — there is nothing outside the REPL's
+own process for a separate invocation to reach. `run`/`results`, by contrast, are
+unrelated to the live cluster (they operate on the simulated `ExperimentRunner` and
+the persisted `results/` directory, exactly like the already-shipped `stress`/
+`chaos`/`replay`) and stay ordinary one-shot top-level commands.
+
+### P9 — `SimulatedNetwork`, not `InMemoryBus`, backs the live cluster
+
+**Decision:** `ClusterManager` builds its nodes over a `SimulatedNetwork` with the
+default `IDEAL_LINK` (no fault ever configured), not the plainer `InMemoryBus`.
+
+**Why:** a `RaftNode` emits its own trace events regardless of transport, but
+`NODE_CRASHED`/`NODE_RECOVERED`/`PARTITION_*` are narrated only by
+`SimulatedNetwork.register`/`unregister`/`partition` — `InMemoryBus` records nothing
+(its own module docstring says so). Since `restart <id>` is implemented as
+`node.stop(crashed=True)` then a fresh start, using `SimulatedNetwork` means that
+shows up correctly in `trace`/`node logs` with zero extra bookkeeping in
+`ClusterManager`, and it costs nothing today (an ideal link behaves exactly like an
+honest bus) while leaving room for a future fault-injection REPL command with no
+transport swap needed later.
+
+### P9 — `NodeManager`/`ClusterManager`/`LifecycleManager` split
+
+**Decision:** `NodeManager` (`cluster/manager.py`) owns exactly one member's
+construction, WAL path, and start/stop/restart, in isolation from the rest of the
+cluster. `ClusterManager` owns everything shared — the one `SimulatedNetwork`, the one
+`Tracer`/`LiveMetrics` pair, the one `WallClock`, the dict of `NodeManager`s, and the
+one `KVClient` the REPL drives. `LifecycleManager` (`cluster/lifecycle.py`) owns only
+startup/shutdown *sequencing* — `wait_for_leader`, `shutdown` — reusable against a bare
+list of `RaftNode`s the same way `tests/test_node_election.py`'s ad hoc `wait_until`/
+`leaders` helpers already are, but promoted to production code instead of living only
+in a test file.
+
+**Why:** keeps each class testable in isolation (`tests/test_cluster.py` drives
+`LifecycleManager` against a hand-built node list with no `ClusterManager` involved at
+all) and avoids writing the same poll loop three times. Unlike `ExperimentRunner.
+_settle`, which gives up silently and lets a simulated run proceed leaderless,
+`LifecycleManager.wait_for_leader` raises `LifecycleTimeout` — a live cluster a human
+is about to run commands against should fail loudly if it never settles, not hand back
+a session with nothing actually elected.
+
+### P9 — `NodeManager.restart` reuses Phase 8's two-path recovery pattern exactly
+
+**Decision:** `NodeManager.restart` rebuilds a fresh `RaftNode` from a reopened
+`WriteAheadLog` when the cluster is persistent (`ClusterConfig.data_dir` set), and
+restarts the same Python object in place otherwise.
+
+**Why:** this is the identical mechanism `experiments/runner.py`'s WAL-backed recovery
+(Phase 8's chaos campaign) already implements, for the same reason: `RaftNode.stop`
+never clears in-memory state, only the task and file handle, so only a fresh object
+rebuilt from what actually reached disk can prove a restart is real. Reused, not
+reinvented.
+
+### P9 — `asyncio.to_thread(input, ...)` keeps node timers alive during the REPL's read
+
+**Decision:** the REPL's line-read goes through `asyncio.to_thread(input, PROMPT)`,
+never a bare `input()` call in the coroutine.
+
+**Why:** a bare `input()` would block the one event loop every `RaftNode` task,
+heartbeat timer and election timer in the process shares — freezing the cluster
+between keystrokes. `asyncio.to_thread` (stdlib since 3.9; this project targets 3.11+)
+moves the blocking read to a worker thread while the loop keeps running underneath the
+`await`. Verified directly: `typer.testing.CliRunner.invoke(..., input="...")`
+successfully drives a full scripted `cluster start` session — put/get/status/topology/
+exit — over piped stdin with exit code 0 (`tests/test_cli.py`), which would not work
+if the read blocked the loop the cluster's own tasks depend on.
+
+**Flagged, not silently resolved:** if `KeyboardInterrupt` unwinds the awaiting
+coroutine while the worker thread is still blocked on a real terminal's stdin, that
+thread cannot be cancelled and stays blocked — Python's interpreter shutdown tries to
+join outstanding executor threads before exiting, which can make the process hang
+after Ctrl+C rather than terminate promptly. Windows' default `ProactorEventLoop` also
+has a long-standing gap (CPython bpo-23057) where `KeyboardInterrupt` isn't always
+delivered promptly while the loop is idle-waiting on I/O. `exit`/`quit`/EOF (Ctrl+Z
+then Enter on Windows, not Ctrl+D) are therefore the primary, reliable ways to end a
+session — stated in the REPL's own `help` text and in README's example — and Ctrl+C is
+best-effort. A follow-up (a dedicated reader thread with its own signal handling, or a
+small `prompt_toolkit`-based reader) is the natural fix if this proves disruptive in
+practice; deliberately not built now.
+
+### P9 — `pyraft-lab run`/`results` close the gap Phases 7 and 8 both deferred by name
+
+**Decision:** `run --scenario <path>` and `results [--results-dir]` are ordinary
+one-shot commands, unrelated to the live cluster, built as thin wrappers over
+`Scenario.load`/`run_scenario`/`persist_run`/`metrics.report`/`RunManifest.load` — no
+new experiment machinery.
+
+**Why:** `cli/main.py`'s own module docstring and this doc's Phase 7 entries both
+explicitly named this gap and deferred it to "the cluster/experiment CLI plan.md
+assigns to Phase 9." This is that promise kept, not a new design — `run` is `stress`/
+`chaos`'s single-scenario sibling over the exact same runner and persistence
+machinery, and `results` is the first thing to actually read back what `persist_run`
+and `write_report` have been writing to `results/` since Phase 7.
 
 ## Deferred
 
