@@ -28,7 +28,7 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 8 — Stress & chaos | **done** — auto-generated stress campaigns, randomized chaos campaigns, both replay-able |
 | 9 — Cluster controller & CLI | **done** — live in-process cluster with an interactive session, `init`/`run`/`results` |
 | 10 — Benchmarking | **done** — `pyraft-lab benchmark` across node counts × packet loss, comparison graphs, `--plot` for any run |
-| 11 — Dashboard (if time remains) | not started |
+| 11 — Dashboard | **done** — `dashboard` command inside `cluster start`: live term/leader/health, per-node role, commit/applied/log length, election time, p99 latency, availability |
 | 12 — Docs & ship | not started |
 
 Nothing in this repo mocks a Raft mechanism or hard-codes a metric. Commands that
@@ -136,9 +136,9 @@ pyraft-lab chaos --nodes 5 --duration 20s --trials 40
 `cluster start` builds a real, live cluster — real `RaftNode`s, real election timers,
 a `WallClock` — in this one process, and hands control to an interactive session.
 There is no daemon behind it: `put`/`get`/`status`/`show-log`/`node inspect`/
-`node logs`/`trace`/`restart`/`topology` are commands typed *inside* that session, not
-separate `pyraft-lab` invocations, because there is nothing else running for a later
-command to address (see [docs/architecture.md](docs/architecture.md) P9).
+`node logs`/`trace`/`restart`/`topology`/`dashboard` are commands typed *inside* that
+session, not separate `pyraft-lab` invocations, because there is nothing else running
+for a later command to address (see [docs/architecture.md](docs/architecture.md) P9).
 
 ```bash
 pyraft-lab init
@@ -166,6 +166,44 @@ Pass `--data-dir` to persist every node's state to a WAL, so a `restart <id>` re
 that node purely from disk rather than reusing its in-memory object. `--config` reads
 a hand-edited `cluster.yaml` (written by `init`) for the settings that aren't CLI
 flags — election timeout range, heartbeat interval, client timeout.
+
+## Live dashboard
+
+`dashboard` (typed inside a `cluster start` session, same as `status`/`topology`) is
+a live, terminal-based view of that same cluster — not a separate command, since
+there is nothing outside the session for one to address. Runs until Ctrl+C, or for a
+fixed number of frames with `--refreshes`.
+
+```
+pyraft-lab> dashboard --refreshes 1
+-- refresh 1 --
+PyRaft Lab Dashboard
++---------------------------------+
+| Cluster: 5 nodes        Term: 1 |
+| Leader: n2      Status: HEALTHY |
++---------------------------------+
+
+n1       n2       n3       n4       n5
+Follower LEADER   Follower Follower Follower
+
+Commit Index:   2
+Applied:        2
+Log Entries:    2
+
+Election Time:  1ms
+P99 Latency:    2ms
+Availability:   100.00%
+
+Elections:      1
+Dropped pkts:   0  (loss 0, partition 0)
+```
+
+Plain ASCII throughout and no cursor-control escapes — each frame prints in full and
+the terminal scrolls, rather than risking a Windows console that can't render 2.0's
+own box-drawing mock-up or doesn't support ANSI clear-screen (see
+[docs/architecture.md](docs/architecture.md) P11). P99 latency and availability come
+from whatever traffic has actually gone through the session's own client — nothing
+synthetic is injected to fill them in, so they read `n/a` until something has.
 
 ## Running a scenario
 
@@ -233,6 +271,7 @@ src/pyraft_lab/
   client/         leader-discovering client and workload generators
   experiments/    scenario runner, metrics, plots, stress/chaos/benchmark campaigns
   observability/  event vocabulary, tracer, live metrics
+  dashboard/      the live terminal view a `cluster start` session can open
   consistency/    history recording and linearizability checking
   cli/            the pyraft-lab command line
 scenarios/   YAML experiment definitions

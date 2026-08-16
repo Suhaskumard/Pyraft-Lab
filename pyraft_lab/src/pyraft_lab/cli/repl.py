@@ -35,6 +35,7 @@ from pyraft_lab import NodeId
 from pyraft_lab.client.client import RequestFailed
 from pyraft_lab.cluster.lifecycle import LifecycleTimeout
 from pyraft_lab.cluster.manager import ClusterError, ClusterManager
+from pyraft_lab.dashboard.app import run_dashboard
 
 PROMPT = "pyraft-lab> "
 
@@ -51,6 +52,9 @@ Commands:
   node logs <id> [--last N]    that node's recent trace events (default 20)
   restart <id>                 crash and restart one node
   trace [--last N]             the cluster's recent trace events (default 50)
+  dashboard [--refreshes N] [--interval S]
+                                live view, refreshing every S seconds (default 1.0);
+                                runs until Ctrl+C, or for N frames if given
   help                         this text
   exit | quit                  stop the cluster and leave"""
 
@@ -94,6 +98,30 @@ def _parse_last(args: list[str], *, default: int) -> int:
         except ValueError as exc:
             raise ReplCommandError(f"--last needs a number, got {args[1]!r}") from exc
     raise ReplCommandError("usage: trace [--last N]")
+
+
+def _parse_dashboard_args(args: list[str]) -> tuple[int | None, float]:
+    """``[--refreshes N] [--interval S]``, either flag optional, in either order."""
+    refreshes: int | None = None
+    interval = 1.0
+    remaining = list(args)
+    while remaining:
+        flag, remaining = remaining[0], remaining[1:]
+        if flag == "--refreshes" and remaining:
+            value, remaining = remaining[0], remaining[1:]
+            try:
+                refreshes = int(value)
+            except ValueError as exc:
+                raise ReplCommandError(f"--refreshes needs a number, got {value!r}") from exc
+        elif flag == "--interval" and remaining:
+            value, remaining = remaining[0], remaining[1:]
+            try:
+                interval = float(value)
+            except ValueError as exc:
+                raise ReplCommandError(f"--interval needs a number, got {value!r}") from exc
+        else:
+            raise ReplCommandError("usage: dashboard [--refreshes N] [--interval S]")
+    return refreshes, interval
 
 
 def _parse_id_and_last(args: list[str], *, default_last: int) -> tuple[NodeId, int]:
@@ -264,6 +292,18 @@ async def _cmd_trace(manager: ClusterManager, args: list[str]) -> str:
     return manager.tracer.story(events) if events else "(no events yet)"
 
 
+async def _cmd_dashboard(manager: ClusterManager, args: list[str]) -> str:
+    """Live view, refreshing in place. Prints its own frames via ``typer.echo`` as it
+    goes rather than returning one string - the only handler that does, because a
+    dashboard is several frames over time, not one answer. Returns "" so ``run_repl``
+    doesn't print anything a second time."""
+    refreshes, interval = _parse_dashboard_args(args)
+    if interval <= 0:
+        raise ReplCommandError("--interval must be positive")
+    await run_dashboard(manager, refreshes=refreshes, interval=interval, echo=typer.echo)
+    return ""
+
+
 async def _cmd_help(manager: ClusterManager, args: list[str]) -> str:
     return HELP_TEXT
 
@@ -281,6 +321,7 @@ _HANDLERS: dict[str, Handler] = {
     "node": _cmd_node,
     "restart": _cmd_restart,
     "trace": _cmd_trace,
+    "dashboard": _cmd_dashboard,
     "help": _cmd_help,
 }
 

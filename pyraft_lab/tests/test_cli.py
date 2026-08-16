@@ -191,6 +191,19 @@ def test_cluster_start_serves_a_full_session_over_piped_stdin(tmp_path: Path) ->
     assert "leader" in result.stdout
 
 
+def test_cluster_start_serves_the_dashboard_then_continues(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["cluster", "start", "--nodes", "3", "--config", str(tmp_path / "no-such-config.yaml")],
+        input="dashboard --refreshes 2 --interval 0.01\nstatus\nexit\n",
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert result.stdout.count("PyRaft Lab Dashboard") == 2
+    assert "LEADER" in result.stdout
+    assert "status: HEALTHY" in result.stdout
+
+
 def test_cluster_start_ends_cleanly_on_eof_with_no_explicit_exit(tmp_path: Path) -> None:
     result = runner.invoke(
         app,

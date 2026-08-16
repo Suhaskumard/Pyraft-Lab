@@ -929,6 +929,81 @@ demand (`benchmark_scenario`/a hand-built `Scenario` with a partition duration >
 this workload), real, and a natural next investigation rather than something to chase
 inside this phase.
 
+### P11 — the dashboard is a REPL command, not a new top-level one
+
+**Decision:** `dashboard [--refreshes N] [--interval S]` is typed inside a
+`cluster start` session, dispatched through `cli/repl.py`'s existing `_HANDLERS`
+table, exactly like `status`/`topology`/`trace` already are. There is no
+`pyraft-lab dashboard` at the top level.
+
+**Why:** the same reasoning P9 already settled for `put`/`get`/`status` and friends —
+a live cluster lives for exactly as long as the process that started it, with no
+daemon, socket or PID file for a separate invocation to address (P9 above). A
+dashboard watches that same live cluster, so it belongs where every other thing that
+watches or drives it already lives. Building a second top-level command that spun up
+its *own* `ClusterManager` just to display one would either duplicate a cluster
+pointlessly or reopen the addressing question P9 already closed.
+
+### P11 — commit/applied/log-length come from the leader's `RaftNode`, not `LiveMetrics`
+
+**Decision:** `dashboard/app.py`'s `collect_snapshot` reads `applied` and
+`log_entries` straight off `manager.node(leader_id).state` — the same object
+`node inspect` already reads (P9) — rather than adding those two values to
+`LiveMetrics`'s vocabulary. `commit_index` is read the same way, even though
+`LiveMetrics.max_commit_index` already exists and is purely event-derived.
+
+**Why:** P4 drew this line for a reason worth keeping: `LiveMetrics` reads events and
+nothing else, specifically so a metric can never look right while the trace is wrong.
+Extending its vocabulary to cover three numbers that already sit, correct, on the live
+object it could just as easily have come from would trade that guarantee for nothing —
+the dashboard is not the event-trace consumer Phase 7's replay or Phase 5's metrics
+report are; it is a live inspector, the same category as `node inspect`/`show-log`,
+and those already read a `RaftNode` directly with no ill effect. Kept `commit_index`
+on the same leader-read path as the other two rather than splitting it out through
+`LiveMetrics` purely for consistency within one snapshot — a dashboard whose three
+numbers came from two different sources of truth would be a harder thing to trust,
+not an easier one.
+
+### P11 — P99 latency and availability come from the REPL's own client traffic, with nothing synthetic injected
+
+**Decision:** `collect_snapshot` reads `manager.client.metrics.latencies`/
+`.availability` — the one `KVClient` a live cluster ever has, shared with every other
+REPL command — and reports `None` (rendered as `n/a`) for both until that client has
+actually completed at least one request.
+
+**Why:** the alternative — the dashboard quietly issuing its own background pings just
+to keep its two liveliest-looking numbers populated — would mean the thing meant to
+show what is really happening to the cluster is itself part of what's happening to the
+cluster, and a demo run alongside genuine traffic would be showing a blend of the two
+with no way to tell which is which. `None` until real traffic exists is the same
+discipline `experiments/metrics.py`'s `report()` already applies throughout its own
+module docstring: "a number that cannot be computed from what happened is reported as
+`None`, never as a zero that would read as 'no data' on a graph" — extended here to a
+live view instead of a finished one.
+
+### P11 — plain ASCII, no cursor-control escapes
+
+**Decision:** `render()` builds its box with `+`/`-`/`|` rather than 2.0's own
+box-drawing mock-up characters (`┌─┐│└┘`), and `run_dashboard` never emits a
+clear-screen or cursor-repositioning escape sequence — each frame prints in full and
+the terminal scrolls.
+
+**Why:** both follow a discipline this project already committed to elsewhere rather
+than inventing a new one. `consistency/history.py`'s `Operation.describe()` avoids a
+Unicode arrow for exactly this reason, stated in its own docstring: "a Windows console
+under its default code page cannot encode an arrow — a report that raises
+`UnicodeEncodeError` while explaining a consistency violation is worse than one that
+prints a hyphen." The same risk applies to Unicode box-drawing characters on the same
+class of terminal, and a *dashboard* raising mid-render is a worse failure than a
+report doing so, since it is meant to be the thing running continuously while
+something else is being demonstrated. Cursor-control escapes carry a parallel, if
+smaller, risk — ANSI VT-sequence support on Windows depends on which terminal is
+hosting the process (P9 already names one Windows terminal gap, CPython bpo-23057, for
+Ctrl+C delivery) — and a dashboard that garbles its own screen on an unsupported
+terminal has no fallback path. A scrolling log of full frames has no such failure
+mode, at the modest cost of not overwriting in place; a future `--clear` flag gated on
+a detected capability is a natural follow-up, not built now.
+
 ## Deferred
 
 - **InstallSnapshot.** Listed in the specification's RPC table but assigned no day, and

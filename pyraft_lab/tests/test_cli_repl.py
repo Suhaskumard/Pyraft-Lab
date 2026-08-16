@@ -11,7 +11,14 @@ from __future__ import annotations
 import pytest
 from tests.test_node_election import FAST_ELECTION, FAST_HEARTBEAT
 
-from pyraft_lab.cli.repl import ReplCommandError, ReplParseError, _dispatch, parse_command, run_repl
+from pyraft_lab.cli.repl import (
+    ReplCommandError,
+    ReplParseError,
+    _dispatch,
+    _parse_dashboard_args,
+    parse_command,
+    run_repl,
+)
 from pyraft_lab.cluster.config import ClusterConfig
 from pyraft_lab.cluster.manager import ClusterManager
 
@@ -49,6 +56,25 @@ def test_parse_command_blank_and_comment_lines_are_a_no_op(line: str) -> None:
 def test_parse_command_rejects_unbalanced_quotes() -> None:
     with pytest.raises(ReplParseError):
         parse_command("put 'a")
+
+
+def test_parse_dashboard_args_defaults_to_unbounded_one_second_refresh() -> None:
+    assert _parse_dashboard_args([]) == (None, 1.0)
+
+
+def test_parse_dashboard_args_reads_both_flags_in_either_order() -> None:
+    assert _parse_dashboard_args(["--refreshes", "3", "--interval", "0.5"]) == (3, 0.5)
+    assert _parse_dashboard_args(["--interval", "0.5", "--refreshes", "3"]) == (3, 0.5)
+
+
+def test_parse_dashboard_args_rejects_a_non_numeric_value() -> None:
+    with pytest.raises(ReplCommandError):
+        _parse_dashboard_args(["--refreshes", "many"])
+
+
+def test_parse_dashboard_args_rejects_an_unknown_flag() -> None:
+    with pytest.raises(ReplCommandError):
+        _parse_dashboard_args(["--bogus", "1"])
 
 
 # --- dispatch: real commands against a real, running cluster -----------------------------
@@ -109,6 +135,34 @@ async def test_dispatch_node_inspect_and_logs() -> None:
         await manager.stop()
 
 
+async def test_dispatch_dashboard_prints_its_own_frames_and_returns_nothing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``dashboard`` is the one handler that prints as it goes rather than returning
+    one string - see its docstring in cli/repl.py."""
+    manager = ClusterManager(a_config())
+    await manager.start()
+    try:
+        output = await _dispatch(manager, "dashboard", ["--refreshes", "2", "--interval", "0.01"])
+        assert output == ""
+    finally:
+        await manager.stop()
+
+    out = capsys.readouterr().out
+    assert out.count("PyRaft Lab Dashboard") == 2
+    assert "LEADER" in out
+
+
+async def test_dispatch_dashboard_rejects_a_non_positive_interval() -> None:
+    manager = ClusterManager(a_config())
+    await manager.start()
+    try:
+        with pytest.raises(ReplCommandError, match="positive"):
+            await _dispatch(manager, "dashboard", ["--interval", "0"])
+    finally:
+        await manager.stop()
+
+
 # --- run_repl: a scripted session, no real stdin ------------------------------------------
 
 
@@ -152,6 +206,27 @@ async def test_a_scripted_session_survives_an_unknown_command(
 
     out = capsys.readouterr().out
     assert "error: unknown command" in out
+
+
+async def test_a_scripted_session_continues_normally_after_the_dashboard(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manager = ClusterManager(a_config())
+    await manager.start()
+
+    lines = iter(["dashboard --refreshes 1 --interval 0.01", "status", "exit"])
+
+    async def fake_read_line(prompt: str) -> str:
+        return next(lines)
+
+    try:
+        await run_repl(manager, read_line=fake_read_line)
+    finally:
+        await manager.stop()
+
+    out = capsys.readouterr().out
+    assert "PyRaft Lab Dashboard" in out
+    assert "status: HEALTHY" in out  # the session kept going after the dashboard returned
 
 
 async def test_a_scripted_session_ends_cleanly_on_eof(capsys: pytest.CaptureFixture[str]) -> None:

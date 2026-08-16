@@ -301,11 +301,45 @@ As built:
   this scenario. Flagged rather than fixed, in docs/architecture.md P10 — the fix is
   protocol-level work (pre-vote), out of scope for a benchmarking phase.
 
-### Phase 11 — Local Dashboard (2.0 item 3) — if time remains
+### Phase 11 — Local Dashboard (2.0 item 3) — done
 
 Terminal-based live view (not a web app, per item 16's boundary) reading Phase 4's live
 metrics: cluster/term/leader/health header, per-node role row, commit/applied/log
 length, election time, p99 latency, availability. `dashboard/app.py`.
+
+As built:
+
+- `dashboard/app.py` (done): `collect_snapshot(manager)` reads a live `ClusterManager`
+  into a plain `DashboardSnapshot`; `render(snapshot)` is a pure formatter with no I/O
+  of its own; `run_dashboard` loops the two over `asyncio.sleep` (never a blocking
+  call — every node's timers keep running while a frame sits on screen) with an
+  injectable `sleep`/`echo` pair, the same seam `run_repl`'s `read_line` already uses.
+  Commit index, applied index and log length come straight off the current leader's
+  own `RaftNode` — the same thing `node inspect` already reads — rather than growing
+  `LiveMetrics`'s vocabulary; P99 latency and availability come from the one
+  `KVClient` a live cluster has (`manager.client.metrics`), with no synthetic traffic
+  injected to fill them in, so both read `n/a` honestly until something has actually
+  been asked of the cluster.
+- Lives inside the REPL, not a new top-level command: `dashboard [--refreshes N]
+  [--interval S]`, typed inside a `cluster start` session exactly like `status`/
+  `topology`/`trace` already are. Consistent with P9's own reasoning — there is
+  nothing outside that one process for a separate `pyraft-lab dashboard` invocation to
+  address. Ctrl+C is caught inside `run_dashboard` itself, so it backs out to the
+  prompt rather than ending the whole session; a bounded `--refreshes` mode is what
+  the test suite drives, with no real terminal or real delay needed.
+- Rendering is plain ASCII, not 2.0's own box-drawing mock-up characters — the same
+  Windows-console-encoding discipline `consistency/history.py`'s `Operation.describe()`
+  already established, extended here rather than reinvented. No cursor-control escape
+  codes either: each frame is printed in full and scrolls, rather than overwriting the
+  previous one, since ANSI clear-screen support isn't guaranteed across every terminal
+  this might run in and a scrolling log costs nothing a demo needs.
+- From 2.0 item 3's fuller "Then show:" list, `dropped_packets` and the election count
+  are included (already sat on `SimulatedNetwork.stats`/`LiveMetrics` for free); a
+  leadership-timeline widget and a request-rate figure are not — the former is a plot,
+  Phase 10's territory, not a terminal readout, and the latter would need new
+  state-tracking plumbing (a request count is easy, a *rate* needs a clock reference
+  nothing currently tracks) that a "no new engine code" phase shouldn't grow just for
+  this.
 
 ### Phase 12 — Documentation, Final Architecture Pass, Ship (Days 14–15 + 2.0 item 15)
 
