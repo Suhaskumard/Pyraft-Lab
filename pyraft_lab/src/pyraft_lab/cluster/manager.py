@@ -21,6 +21,7 @@ future fault-injection REPL command with no transport swap needed later.
 from __future__ import annotations
 
 import random
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -196,11 +197,20 @@ class ClusterManager:
             timeout=self.config.election_timeout_range[1] * 4,
         )
 
+        # A fresh session id per start, never the bare constant. The state machine's
+        # §6.3 dedup table is keyed on this id and is rebuilt by replaying the WAL, so a
+        # WAL-backed cluster comes back up already holding the *previous* session's
+        # highest serial. A client that reused the id would restart its serial counter
+        # at zero, and every write it made would look like a retry of a request already
+        # answered - applied as a duplicate, skipped, and answered from the cache. The
+        # entry still replicates and commits, so nothing looks wrong until you notice
+        # the store never changed.
+        client_id = f"repl-client-{uuid.uuid4().hex[:8]}"
         self._channel = BusChannel(
-            self.network, "repl-client", timeout=self.config.client_timeout, clock=self.clock
+            self.network, client_id, timeout=self.config.client_timeout, clock=self.clock
         )
         self.client = KVClient(
-            "repl-client",
+            client_id,
             self.config.node_ids,
             self._channel,
             policy=RetryPolicy(),

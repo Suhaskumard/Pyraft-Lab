@@ -59,8 +59,8 @@ export function StressCampaignScreen() {
             <Metric label="Failed" value={report.failed} tone={report.failed ? 'bad' : 'good'} />
             <Metric
               label="Data loss"
-              value={report.results.filter((t) => t.data_loss).length}
-              tone={report.results.some((t) => t.data_loss) ? 'bad' : 'good'}
+              value={report.trial_results.filter((t) => t.data_loss).length}
+              tone={report.trial_results.some((t) => t.data_loss) ? 'bad' : 'good'}
             />
           </div>
 
@@ -68,7 +68,7 @@ export function StressCampaignScreen() {
             title="Trials"
             subtitle="A trial passes when no committed write was lost and no two logs diverged"
           >
-            {!report.results.length ? (
+            {!report.trial_results.length ? (
               <Empty title="No trials recorded" />
             ) : (
               <div className="obsidian-table-container max-h-[30rem] overflow-y-auto">
@@ -87,7 +87,7 @@ export function StressCampaignScreen() {
                     </tr>
                   </thead>
                   <tbody>
-                    {report.results.map((trial) => (
+                    {report.trial_results.map((trial) => (
                       <tr key={trial.trial_index}>
                         <td className="font-mono text-right text-[#8b919d]">{trial.trial_index}</td>
                         <td className="font-mono">{trial.fault_kind}</td>

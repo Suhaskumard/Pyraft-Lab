@@ -56,8 +56,14 @@ def test_availability_counts_requests_not_attempts() -> None:
     assert metrics.availability == 1.0
 
 
-def test_availability_is_zero_before_any_request() -> None:
-    assert ClientMetrics().availability == 0.0
+def test_availability_is_unmeasured_before_any_request() -> None:
+    """Not 0.0: nothing has been asked of the cluster, so nothing has been denied.
+
+    Reporting zero here is what put a red 0.00% on the overview of an idle but
+    perfectly healthy cluster, and it is the same distinction ``percentile`` draws
+    when it refuses to call an unmeasured latency zero.
+    """
+    assert ClientMetrics().availability is None
 
 
 def test_availability_reflects_outright_failures() -> None:

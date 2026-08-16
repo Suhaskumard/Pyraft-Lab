@@ -108,6 +108,9 @@ export function FaultInjectionLabScreen() {
                 <button
                   key={node.id}
                   onClick={() => toggle(node.id)}
+                  // A toggle, not a command: which side a node is on is otherwise only
+                  // legible as a border colour.
+                  aria-pressed={group.has(node.id)}
                   className={`flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs transition-all ${
                     group.has(node.id)
                       ? 'border-[#8957e5] bg-[#8957e5]/10 text-[#d3bbff]'

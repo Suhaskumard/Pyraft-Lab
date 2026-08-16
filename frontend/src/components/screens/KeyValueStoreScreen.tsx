@@ -167,7 +167,9 @@ export function KeyValueStoreScreen() {
                 {records.map((record) => (
                   <tr key={record.key}>
                     <td className="font-mono font-medium text-[#58a6ff]">{record.key}</td>
-                    <td className="font-mono">{fmtValue(record.value)}</td>
+                    <td className="font-mono cell-truncate" title={fmtValue(record.value)}>
+                      {fmtValue(record.value)}
+                    </td>
                     <td className="font-mono text-right text-[#8b919d]">{record.version}</td>
                     <td className="font-mono text-right">{record.modifiedTerm ?? '—'}</td>
                     <td className="font-mono text-right">{record.modifiedIndex ?? '—'}</td>

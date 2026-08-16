@@ -77,6 +77,38 @@ def test_cluster_config_from_dict_rejects_zero_nodes() -> None:
         ClusterConfig.from_dict({"nodes": 0})
 
 
+def test_cluster_config_rejects_an_inverted_election_range() -> None:
+    """A node picks its timeout from inside the range, so an empty range is meaningless.
+
+    The API checked this on its own request bodies, but ``ClusterConfig`` did not - so a
+    hand-edited ``cluster.yaml`` carrying an inverted range loaded without complaint.
+    """
+    with pytest.raises(ClusterConfigError, match="minimum election timeout must be below"):
+        ClusterConfig(election_timeout_range=(0.300, 0.150))
+
+
+def test_cluster_config_rejects_non_positive_timers() -> None:
+    with pytest.raises(ClusterConfigError, match="election timeouts must be positive"):
+        ClusterConfig(election_timeout_range=(0.0, 0.300))
+    with pytest.raises(ClusterConfigError, match="heartbeat interval must be positive"):
+        ClusterConfig(heartbeat_interval=0.0)
+    with pytest.raises(ClusterConfigError, match="client timeout must be positive"):
+        ClusterConfig(client_timeout=-1.0)
+
+
+def test_a_heartbeat_slower_than_the_election_timeout_is_flagged_not_refused() -> None:
+    """Legal on purpose: an election storm is something this lab exists to demonstrate.
+
+    It is reported instead, so the UI can say what will happen rather than restating
+    the rule itself.
+    """
+    healthy = ClusterConfig(election_timeout_range=(0.150, 0.300), heartbeat_interval=0.050)
+    churning = ClusterConfig(election_timeout_range=(0.150, 0.300), heartbeat_interval=0.500)
+
+    assert healthy.heartbeat_is_too_slow is False
+    assert churning.heartbeat_is_too_slow is True
+
+
 def test_loading_a_cluster_config_that_is_not_there_says_so(tmp_path: Path) -> None:
     with pytest.raises(ClusterConfigError, match="no cluster config at"):
         ClusterConfig.load(tmp_path / "nope.yaml")
@@ -144,6 +176,44 @@ async def test_restart_with_wal_rebuilds_purely_from_disk(tmp_path: Path) -> Non
         assert after.state.commit_index > 0
     finally:
         await manager.stop()
+
+
+async def test_a_second_session_on_the_same_wal_is_not_deduplicated_away(tmp_path: Path) -> None:
+    """Writes made after a WAL-backed cluster restarts must actually apply.
+
+    The §6.3 session table is rebuilt by replaying the WAL, so the new cluster starts
+    already holding the previous session's highest serial. When the client id was the
+    bare constant ``"repl-client"``, the fresh client restarted its serial counter at
+    zero and every write it made was taken for a retry of a request already answered:
+    replicated and committed, then skipped at apply time and answered from the cache.
+    The store never changed and ``put`` returned the *earlier* write's value.
+    """
+    config = a_config(data_dir=tmp_path)
+
+    first = ClusterManager(config)
+    await first.start()
+    try:
+        first_client_id = first.client.client_id
+        await first.client.put("before", "1")
+        await first.client.put("before", "2")
+        await first.client.put("before", "3")
+    finally:
+        await first.stop()
+
+    second = ClusterManager(config)
+    await second.start()
+    try:
+        returned = await second.client.put("after", "4")
+        leader = second.node(leader_id(second))
+
+        assert returned == "4"  # its own value, not the last write of session one
+        assert leader.store.read("after") == "4"
+        assert leader.store.read("before") == "3"  # the replayed prefix is intact
+
+        # The mechanism behind the three assertions above: a distinct session id.
+        assert second.client.client_id != first_client_id
+    finally:
+        await second.stop()
 
 
 async def test_restart_of_the_leader_reelects_and_the_cluster_stays_healthy() -> None:

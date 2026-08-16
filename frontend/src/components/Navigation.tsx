@@ -104,7 +104,10 @@ export function Navigation({
   liveScreens,
 }: NavigationProps) {
   return (
-    <aside className="w-60 bg-[#101419] border-r border-[#30363d] p-3 flex flex-col gap-4 h-[calc(100vh-57px)] overflow-y-auto shrink-0 select-none">
+    <aside
+      aria-label="Screens"
+      className="w-60 bg-[#101419] border-r border-[#30363d] p-3 flex flex-col gap-4 h-[calc(100vh-57px)] overflow-y-auto shrink-0 select-none"
+    >
       {GROUPS.map((group) => (
         <div key={group.label} className="flex flex-col gap-1">
           <div className="label-caps px-2 py-1 text-[10px]">{group.label}</div>
@@ -118,6 +121,10 @@ export function Navigation({
               <button
                 key={item.id}
                 onClick={() => onSelectScreen(item.id)}
+                // Which screen you are on is otherwise carried by colour and a border
+                // alone, neither of which a screen reader announces.
+                aria-current={isActive ? 'page' : undefined}
+                aria-disabled={unavailable || undefined}
                 title={unavailable ? 'Needs a running cluster' : undefined}
                 className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded text-xs text-left transition-all ${
                   isActive

@@ -4,6 +4,7 @@ import { api } from '../../api/client';
 import { useLab } from '../../api/LabContext';
 import { useResource } from '../../api/useResource';
 import { Failure, Panel, ScreenHeader, Skeleton } from '../ui';
+import type { ClusterConfigForm } from '../../types/pyraft';
 
 /**
  * The saved `cluster.yaml`, edited in place.
@@ -17,20 +18,19 @@ export function SettingsScreen() {
   const { cluster, notify } = useLab();
   const config = useResource(() => api.getConfig(), []);
 
-  const [form, setForm] = useState<{
-    nodes: number;
-    persistent: boolean;
-    electionTimeoutMinMs: number;
-    electionTimeoutMaxMs: number;
-    heartbeatIntervalMs: number;
-    clientTimeoutMs: number;
-    seed: number;
-  } | null>(null);
+  const [form, setForm] = useState<ClusterConfigForm | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!config.data || form) return;
-    const { path: _path, saved: _saved, ...rest } = config.data;
+    // `heartbeatTooSlow` is a verdict the server derives from the timers, not a field
+    // it accepts back — sending it would be asking the server to agree with itself.
+    const {
+      path: _path,
+      saved: _saved,
+      heartbeatTooSlow: _tooSlow,
+      ...rest
+    } = config.data;
     setForm(rest);
   }, [config.data, form]);
 
@@ -155,9 +155,13 @@ export function SettingsScreen() {
                 />
                 {invalid && <Failure message="The minimum election timeout must be below the maximum." />}
                 {!invalid && form.heartbeatIntervalMs >= form.electionTimeoutMinMs && (
-                  <div className="text-[11px] text-[#ffba42]">
-                    The heartbeat is not comfortably under the minimum election timeout — expect
-                    followers to time out against a leader that is perfectly healthy.
+                  <div className="text-[11px] text-[#ffba42] leading-relaxed">
+                    <strong>This cluster will not hold a leader.</strong> A heartbeat of{' '}
+                    {form.heartbeatIntervalMs} ms cannot reach a follower whose election timeout
+                    starts at {form.electionTimeoutMinMs} ms, so followers will campaign against a
+                    leader that is perfectly healthy — the term climbs without limit and writes
+                    rarely commit. Saving is still allowed: watching that happen is a valid
+                    experiment, but it is not a configuration to leave in place.
                   </div>
                 )}
               </div>

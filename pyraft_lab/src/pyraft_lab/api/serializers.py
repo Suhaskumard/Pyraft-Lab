@@ -24,6 +24,10 @@ def _ms(seconds: float | None) -> float | None:
     return None if seconds is None else seconds * MS
 
 
+def _pct(fraction: float | None) -> float | None:
+    return None if fraction is None else fraction * 100
+
+
 def percentile(values: list[float], fraction: float) -> float | None:
     """Nearest-rank percentile. ``None`` for an empty series, never 0.0 - a latency
     nobody has measured is not a latency of zero."""
@@ -217,7 +221,7 @@ def cluster_status(manager: ClusterManager) -> dict[str, Any]:
         "meanElectionTimeMs": _ms(live["mean_election_seconds"]),
         "p50LatencyMs": _ms(percentile(latencies, 0.50)),
         "p99LatencyMs": _ms(percentile(latencies, 0.99)),
-        "availabilityPct": (client_metrics["availability"] * 100) if client_metrics else None,
+        "availabilityPct": _pct(client_metrics["availability"]) if client_metrics else None,
         "client": client_metrics,
         "messagesSent": stats.sent,
         "messagesDelivered": stats.delivered,
@@ -280,8 +284,8 @@ def rpc_row(event: Event) -> dict[str, Any] | None:
     if label is None:
         return None
 
-    peer = event.details.get("peer") or event.details.get("candidate") or event.details.get(
-        "leader"
+    peer = (
+        event.details.get("peer") or event.details.get("candidate") or event.details.get("leader")
     )
     return {
         "id": f"rpc-{event.seq}",
@@ -319,9 +323,7 @@ def wal_report(path: Path, records: list[dict[str, Any]], recovery: Any) -> dict
                 "kind": record.get("kind"),
                 "index": record.get("index"),
                 "term": record.get("term"),
-                "detail": " ".join(
-                    f"{k}={v}" for k, v in sorted(record.items()) if k != "kind"
-                ),
+                "detail": " ".join(f"{k}={v}" for k, v in sorted(record.items()) if k != "kind"),
                 # A record listed here verified its own checksum; the listing stops at
                 # the first one that did not (see cli/main.py's _wal_records).
                 "status": "VALID",

@@ -187,6 +187,15 @@ body {
   white-space: nowrap;
 }
 
+/* For a cell holding unbounded user content. Table layout sizes a column to its widest
+   cell, so one 100 KB value stretched the row until every column after it — including
+   the delete button — sat off-screen behind a long horizontal scroll. */
+.obsidian-table td.cell-truncate {
+  max-width: 32rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .obsidian-table tr:last-child td {
   border-bottom: none;
 }

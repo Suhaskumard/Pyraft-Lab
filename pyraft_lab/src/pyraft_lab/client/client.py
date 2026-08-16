@@ -60,15 +60,20 @@ class ClientMetrics:
     latencies: list[float] = field(default_factory=list)
 
     @property
-    def availability(self) -> float:
-        """Fraction of *requests* that eventually succeeded.
+    def availability(self) -> float | None:
+        """Fraction of *requests* that eventually succeeded, or ``None`` for no requests.
 
         Deliberately counted per request, not per attempt: a request that succeeded on
         its third try was still served, and a system that retries into success is
         available. Retry cost shows up in the latency series instead.
+
+        ``None`` rather than ``0.0`` when nothing has been asked of the cluster yet, for
+        the same reason ``percentile`` returns ``None`` for an empty series: an
+        availability nobody has measured is not an availability of zero. Reporting 0.0
+        put a red 0.00% on the overview of an idle, perfectly healthy cluster.
         """
         served = self.successes + self.failures
-        return self.successes / served if served else 0.0
+        return self.successes / served if served else None
 
     def as_dict(self) -> dict[str, Any]:
         return {

@@ -10,6 +10,7 @@
 
 import type {
   ApiConfig,
+  ClusterConfigForm,
   ClusterPayload,
   FaultState,
   Job,
@@ -67,6 +68,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
 
+/**
+ * One path segment, escaped.
+ *
+ * Applied to every interpolated identifier rather than only the ones that look risky:
+ * a KV key is arbitrary user text, and the day one arrives holding a `?`, a `#` or a
+ * space is not the day to discover the URL was being built by concatenation. Node and
+ * job ids are server-generated and safe today, but they cost nothing to escape and
+ * stop the pattern from being "escape it if you remember to".
+ */
+const seg = (value: string) => encodeURIComponent(value);
+
 export interface StartClusterOptions {
   nodes?: number;
   seed?: number;
@@ -82,7 +94,7 @@ export const api = {
 
   // --- configuration ---------------------------------------------------------------
   getConfig: () => request<ApiConfig>('/config'),
-  saveConfig: (body: Omit<ApiConfig, 'path' | 'saved'>) =>
+  saveConfig: (body: ClusterConfigForm) =>
     request<ApiConfig>('/config', { method: 'PUT', body: JSON.stringify(body) }),
 
   // --- the live cluster ------------------------------------------------------------
@@ -92,15 +104,15 @@ export const api = {
   exec: (line: string) => post<{ ok: boolean; output: string }>('/cluster/exec', { line }),
 
   nodes: () => request<NodeState[]>('/cluster/nodes'),
-  node: (id: NodeId) => request<NodeState>(`/cluster/nodes/${id}`),
-  restartNode: (id: NodeId) => post<NodeState>(`/cluster/nodes/${id}/restart`),
-  crashNode: (id: NodeId) => post<NodeState>(`/cluster/nodes/${id}/crash`),
-  recoverNode: (id: NodeId) => post<NodeState>(`/cluster/nodes/${id}/recover`),
+  node: (id: NodeId) => request<NodeState>(`/cluster/nodes/${seg(id)}`),
+  restartNode: (id: NodeId) => post<NodeState>(`/cluster/nodes/${seg(id)}/restart`),
+  crashNode: (id: NodeId) => post<NodeState>(`/cluster/nodes/${seg(id)}/crash`),
+  recoverNode: (id: NodeId) => post<NodeState>(`/cluster/nodes/${seg(id)}/recover`),
   nodeEvents: (id: NodeId, last = 60) =>
-    request<TraceEvent[]>(`/cluster/nodes/${id}/events?last=${last}`),
-  nodeWal: (id: NodeId) => request<WalReport>(`/cluster/nodes/${id}/wal`),
-  nodeSnapshots: (id: NodeId) => request<SnapshotListing>(`/cluster/nodes/${id}/snapshots`),
-  takeSnapshot: (id: NodeId) => post<SnapshotMeta>(`/cluster/nodes/${id}/snapshots`),
+    request<TraceEvent[]>(`/cluster/nodes/${seg(id)}/events?last=${last}`),
+  nodeWal: (id: NodeId) => request<WalReport>(`/cluster/nodes/${seg(id)}/wal`),
+  nodeSnapshots: (id: NodeId) => request<SnapshotListing>(`/cluster/nodes/${seg(id)}/snapshots`),
+  takeSnapshot: (id: NodeId) => post<SnapshotMeta>(`/cluster/nodes/${seg(id)}/snapshots`),
 
   log: (node?: NodeId, limit?: number) => {
     const query = new URLSearchParams();
@@ -114,9 +126,9 @@ export const api = {
   // --- the key-value store ----------------------------------------------------------
   listKv: () => request<{ nodeId: NodeId; records: KeyValueRecord[] }>('/kv'),
   put: (key: string, value: string) => post<{ ok: boolean }>('/kv', { key, value }),
-  get: (key: string) => request<{ key: string; value: unknown; found: boolean }>(`/kv/${key}`),
+  get: (key: string) => request<{ key: string; value: unknown; found: boolean }>(`/kv/${seg(key)}`),
   del: (key: string) =>
-    request<{ ok: boolean; existed: boolean }>(`/kv/${key}`, { method: 'DELETE' }),
+    request<{ ok: boolean; existed: boolean }>(`/kv/${seg(key)}`, { method: 'DELETE' }),
   cas: (key: string, expected: string, next: string) =>
     post<{ ok: boolean }>('/kv/cas', { key, expected, new: next }),
 
@@ -132,7 +144,7 @@ export const api = {
   scenarios: () => request<ScenarioSummary[]>('/scenarios'),
   scenario: (name: string) =>
     request<{ file: string; yaml: string; scenario: Record<string, unknown> }>(
-      `/scenarios/${encodeURIComponent(name)}`
+      `/scenarios/${seg(name)}`
     ),
   runScenario: (scenario: string, seed?: number, plot = false) =>
     post<Job>('/experiments/run', { scenario, seed, plot }),
@@ -150,15 +162,15 @@ export const api = {
 
   // --- persisted runs -----------------------------------------------------------------
   results: () => request<ResultRow[]>('/results'),
-  result: (runId: string) => request<RunDetail>(`/results/${encodeURIComponent(runId)}`),
+  result: (runId: string) => request<RunDetail>(`/results/${seg(runId)}`),
   resultEvents: (runId: string, last = 500) =>
-    request<TraceEvent[]>(`/results/${encodeURIComponent(runId)}/events?last=${last}`),
-  replay: (runId: string) => post<Job>(`/results/${encodeURIComponent(runId)}/replay`),
+    request<TraceEvent[]>(`/results/${seg(runId)}/events?last=${last}`),
+  replay: (runId: string) => post<Job>(`/results/${seg(runId)}/replay`),
 
   // --- jobs ---------------------------------------------------------------------------
   jobs: (kind?: string) => request<Job[]>(`/jobs${kind ? `?kind=${kind}` : ''}`),
-  job: (id: string) => request<Job>(`/jobs/${id}`),
-  cancelJob: (id: string) => post<Job>(`/jobs/${id}/cancel`),
+  job: (id: string) => request<Job>(`/jobs/${seg(id)}`),
+  cancelJob: (id: string) => post<Job>(`/jobs/${seg(id)}/cancel`),
 };
 
 /** A message off the live stream. `hello` arrives once, on connect. */

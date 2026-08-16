@@ -101,8 +101,8 @@ def collect_snapshot(manager: ClusterManager) -> DashboardSnapshot:
         metrics = client.metrics
         if metrics.latencies:
             p99_ms = percentile([latency * MS for latency in metrics.latencies], 0.99)
-        if metrics.successes + metrics.failures:
-            availability = metrics.availability
+        # No "has anything been served yet" guard needed: the property answers None.
+        availability = metrics.availability
 
     stats = manager.network.stats
     return DashboardSnapshot(

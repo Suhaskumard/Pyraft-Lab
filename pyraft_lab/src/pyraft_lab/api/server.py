@@ -199,6 +199,9 @@ def _router(lab: LabState) -> APIRouter:  # noqa: C901 - a route table, not a br
             "heartbeatIntervalMs": config.heartbeat_interval * 1000,
             "clientTimeoutMs": config.client_timeout * 1000,
             "seed": config.seed,
+            # Legal but pathological, so it is reported rather than refused - the rule
+            # lives in ClusterConfig so the UI does not have to restate it.
+            "heartbeatTooSlow": config.heartbeat_is_too_slow,
         }
 
     @api.put("/config")
@@ -435,7 +438,11 @@ def _router(lab: LabState) -> APIRouter:  # noqa: C901 - a route table, not a br
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return {"ok": True, "key": body.key, "value": body.value}
 
-    @api.get("/kv/{key}")
+    # ``{key:path}`` rather than ``{key}``: a KV key is arbitrary text, and ``a/b`` is a
+    # perfectly ordinary one. A plain path parameter stops at the next separator, so
+    # such a key could be written and listed but never read or deleted - and encoding
+    # the slash does not help, because the server decodes it back before routing.
+    @api.get("/kv/{key:path}")
     async def get_kv(key: str) -> dict[str, Any]:
         _, kv = client()
         try:
@@ -444,7 +451,7 @@ def _router(lab: LabState) -> APIRouter:  # noqa: C901 - a route table, not a br
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return {"key": key, "value": value, "found": found}
 
-    @api.delete("/kv/{key}")
+    @api.delete("/kv/{key:path}")
     async def delete_kv(key: str) -> dict[str, Any]:
         _, kv = client()
         try:

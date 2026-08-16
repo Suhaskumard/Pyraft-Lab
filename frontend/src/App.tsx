@@ -6,6 +6,7 @@ import { Navigation } from './components/Navigation';
 import type { ScreenId } from './components/Navigation';
 import { GlobalCommandPalette } from './components/GlobalCommandPalette';
 import { NoticeTray } from './components/NoticeTray';
+import { ScreenErrorBoundary } from './components/ScreenErrorBoundary';
 
 import { ClusterOverviewScreen } from './components/screens/ClusterOverviewScreen';
 import { NodeInspectorScreen } from './components/screens/NodeInspectorScreen';
@@ -129,7 +130,9 @@ function Workbench() {
         />
 
         <main className="flex-1 p-5 overflow-y-auto h-[calc(100vh-57px)] bg-[#0b0e14]">
-          {needsCluster ? <ClusterRequired /> : screen()}
+          <ScreenErrorBoundary resetKey={activeScreen}>
+            {needsCluster ? <ClusterRequired /> : screen()}
+          </ScreenErrorBoundary>
         </main>
       </div>
 

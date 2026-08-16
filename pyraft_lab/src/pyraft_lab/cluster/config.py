@@ -49,8 +49,46 @@ class ClusterConfig:
     seed: int = 0
 
     def __post_init__(self) -> None:
+        """Reject configs that cannot describe a working cluster.
+
+        Only structural impossibilities are refused here, not merely unwise timers. A
+        heartbeat at or above the minimum election timeout is the notable case left
+        legal: it produces a cluster in permanent election churn, which is a thing this
+        laboratory exists to let someone watch on purpose. The UI warns about it
+        instead, and ``heartbeat_is_too_slow`` below is what it asks.
+        """
         if self.nodes < 1:
             raise ClusterConfigError(f"a cluster needs at least one node, got {self.nodes}")
+
+        low, high = self.election_timeout_range
+        if low <= 0 or high <= 0:
+            raise ClusterConfigError(
+                f"election timeouts must be positive, got ({low}, {high}) seconds"
+            )
+        if low >= high:
+            raise ClusterConfigError(
+                f"the minimum election timeout must be below the maximum, got ({low}, {high}) "
+                "seconds - a node picks its timeout at random from inside that range"
+            )
+        if self.heartbeat_interval <= 0:
+            raise ClusterConfigError(
+                f"the heartbeat interval must be positive, got {self.heartbeat_interval} seconds"
+            )
+        if self.client_timeout <= 0:
+            raise ClusterConfigError(
+                f"the client timeout must be positive, got {self.client_timeout} seconds"
+            )
+
+    @property
+    def heartbeat_is_too_slow(self) -> bool:
+        """Whether followers will time out against a healthy leader.
+
+        A leader proves it is alive only by heartbeating, so a heartbeat that is not
+        comfortably inside the shortest election timeout guarantees some follower
+        campaigns against a leader that is doing its job. Legal, but never what someone
+        configuring a cluster for real work intends.
+        """
+        return self.heartbeat_interval >= self.election_timeout_range[0]
 
     @property
     def node_ids(self) -> list[NodeId]:

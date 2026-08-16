@@ -93,6 +93,33 @@ def test_a_missing_key_is_a_found_false_answer_not_an_error(running):
     assert body["found"] is False and body["value"] is None
 
 
+def test_a_key_containing_a_slash_can_be_read_and_deleted(running):
+    """``a/b`` is an ordinary KV key, not a path.
+
+    Under a plain ``{key}`` parameter it could be written and listed but never read or
+    deleted - the route stopped at the separator - so the UI showed a row whose Get and
+    delete button both 404'd. Encoding the slash does not help: it is decoded again
+    before routing.
+    """
+    assert running.post("/api/kv", json={"key": "a/b", "value": "slashy"}).status_code == 200
+
+    assert running.get("/api/kv/a/b").json() == {"key": "a/b", "value": "slashy", "found": True}
+    assert running.request("DELETE", "/api/kv/a/b").json()["existed"] is True
+    assert running.get("/api/kv/a/b").json()["found"] is False
+
+
+def test_a_key_named_like_a_route_is_still_a_key(running):
+    """``cas`` collides with ``POST /api/kv/cas`` only if the router confuses methods."""
+    assert running.post("/api/kv", json={"key": "cas", "value": "not-a-route"}).status_code == 200
+    assert running.get("/api/kv/cas").json()["value"] == "not-a-route"
+    assert (
+        running.post(
+            "/api/kv/cas", json={"key": "cas", "expected": "not-a-route", "new": "x"}
+        ).json()["ok"]
+        is True
+    )
+
+
 def test_nodes_report_their_real_raft_state(running):
     nodes = running.get("/api/cluster/nodes").json()
     assert [n["id"] for n in nodes] == ["n1", "n2", "n3"]
@@ -160,12 +187,14 @@ def test_the_console_runs_the_repls_own_commands(running):
     body = running.post("/api/cluster/exec", json={"line": "put greeting hello"}).json()
     assert body == {"ok": True, "output": "ok: greeting = hello"}
 
-    assert "greeting = hello" in running.post(
-        "/api/cluster/exec", json={"line": "get greeting"}
-    ).json()["output"]
-    assert "node    alive" in running.post(
-        "/api/cluster/exec", json={"line": "topology"}
-    ).json()["output"]
+    assert (
+        "greeting = hello"
+        in running.post("/api/cluster/exec", json={"line": "get greeting"}).json()["output"]
+    )
+    assert (
+        "node    alive"
+        in running.post("/api/cluster/exec", json={"line": "topology"}).json()["output"]
+    )
 
 
 def test_an_unknown_console_command_answers_rather_than_500s(running):

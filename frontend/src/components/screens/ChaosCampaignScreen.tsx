@@ -22,7 +22,7 @@ export function ChaosCampaignScreen() {
   const { job, running, starting, start, cancel } = useJobRunner<CampaignReport<ChaosTrial>>('chaos');
 
   const report = job?.status === 'succeeded' ? job.result : null;
-  const lost = report?.results.filter((trial) => trial.data_loss) ?? [];
+  const lost = report?.trial_results.filter((trial) => trial.data_loss) ?? [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -67,13 +67,13 @@ export function ChaosCampaignScreen() {
             <Metric label="Failed" value={report.failed} tone={report.failed ? 'bad' : 'good'} />
             <Metric
               label="Lost writes"
-              value={report.results.reduce((total, trial) => total + trial.lost_write_count, 0)}
+              value={report.trial_results.reduce((total, trial) => total + trial.lost_write_count, 0)}
               tone={lost.length ? 'bad' : 'good'}
             />
           </div>
 
           <Panel title="Trials">
-            {!report.results.length ? (
+            {!report.trial_results.length ? (
               <Empty title="No trials recorded" />
             ) : (
               <div className="obsidian-table-container max-h-[30rem] overflow-y-auto">
@@ -92,7 +92,7 @@ export function ChaosCampaignScreen() {
                     </tr>
                   </thead>
                   <tbody>
-                    {report.results.map((trial) => (
+                    {report.trial_results.map((trial) => (
                       <tr key={trial.trial_index}>
                         <td className="font-mono text-right text-[#8b919d]">{trial.trial_index}</td>
                         <td className="font-mono text-right">{trial.fault_count}</td>

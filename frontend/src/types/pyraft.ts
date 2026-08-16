@@ -339,12 +339,37 @@ export interface ChaosTrial {
   duration_sec: number;
 }
 
+/**
+ * What `/api/campaigns/stress` and `/api/campaigns/chaos` return.
+ *
+ * The trial list is `trial_results`, matching `StressReport.to_dict` and
+ * `ChaosReport.to_dict` — the same key the campaign JSON is persisted under, and the
+ * one `tests/test_stress.py` asserts on. It is deliberately not `results`, which is
+ * `BenchmarkReport`'s own differently-shaped field.
+ *
+ * No index signature: one here let a wrong field name typecheck, so both campaign
+ * screens read `results`, got `undefined`, and threw on first render of a finished
+ * campaign — which unmounted the whole app.
+ */
 export interface CampaignReport<T> {
+  nodes: number;
+  trial_duration_sec: number;
+  base_seed: number;
   trials: number;
   passed: number;
   failed: number;
-  results: T[];
-  [key: string]: unknown;
+  data_loss_trials: number;
+  divergent_trials: number;
+  linearizability: { PASS: number; FAIL: number; UNPROVEN: number };
+  recovery_time_ms: Percentiles;
+  trial_results: T[];
+}
+
+export interface Percentiles {
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  max: number | null;
 }
 
 export interface BenchmarkCell {
@@ -391,4 +416,11 @@ export interface ApiConfig {
   heartbeatIntervalMs: number;
   clientTimeoutMs: number;
   seed: number;
+  /** Server-side verdict on the saved timers: the heartbeat is not comfortably inside
+   *  the shortest election timeout, so followers will campaign against a healthy
+   *  leader. Reported, not refused — watching that happen is a valid experiment. */
+  heartbeatTooSlow: boolean;
 }
+
+/** The fields `PUT /api/config` actually accepts — the rest are server-derived. */
+export type ClusterConfigForm = Omit<ApiConfig, 'path' | 'saved' | 'heartbeatTooSlow'>;
