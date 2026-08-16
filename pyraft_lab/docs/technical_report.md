@@ -223,9 +223,19 @@ not a dead end.
   it leads until it hears a higher term; D10's read lease and the majority commit rule
   already make this safe, so a step-down-on-lease-expiry rule would only change what
   `role` reports, not what the cluster does.
-- **Client session IDs / exactly-once semantics.** Recorded as a known limitation
-  since Phase 2: a retried CAS after a leader change could double-apply. Not in either
-  source document's Definition-of-Done.
+- **Client session IDs / exactly-once semantics.** ~~Recorded as a known limitation
+  since Phase 2: a retried CAS after a leader change could double-apply.~~ **No longer
+  deferred — this one had teeth.** It was not confined to CAS, and the damage was not
+  duplicated work: a retried write is appended a second time and applied *after*
+  whatever was written in between, so an overwritten value comes back to life. That is
+  a linearizability violation with no lost data and no diverged log, which is exactly
+  how it survived every safety check here — `scenarios/packet_loss.yaml` failed its own
+  `expected: linearizable` block on 2 of seeds 33–80, and the log showed six values on
+  one key committed twice each. Fixed per paper §6.3: `RaftNode` stamps `_client`/
+  `_serial` onto a logged write, and `KVStore._sessions` skips a request it has already
+  applied for that client, answering with the result the first attempt earned.
+  `tests/test_exactly_once.py` covers it, including the exact A-then-B-then-A'-retry
+  shape that broke the scenario.
 - **Explicitly out of scope for the whole project** (2.0 item 16, unchanged): multi-Raft
   sharding, TLS/authentication, real network deployment, Byzantine fault tolerance,
   cluster membership changes, a web UI as a core requirement.

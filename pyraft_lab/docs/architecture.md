@@ -189,6 +189,54 @@ whole call is cancelled mid-wait by `stop()`, must both leave no task still regi
 as a waiter on the inbox queue. An orphaned `recv_envelope` there is invisible and
 permanent — nothing will ever await it again.
 
+> **This fast path used to busy-spin on Python 3.11 — fixed by using `timeout_at`.**
+> `asyncio.wait_for` was reimplemented on top of `asyncio.timeout` in 3.12; the older
+> implementation did not settle here, and the receive loop woke far more often than its
+> deadline asked for. One idle second of a plain 3-node cluster:
+>
+> | interpreter | before | after |
+> | --- | --- | --- |
+> | 3.13 | 204 | 220 |
+> | 3.12 | 308 | 288 |
+> | 3.11 | **10,628** | **292** |
+>
+> The spin was tight enough to starve the event loop outright — an
+> `await asyncio.sleep(1.0)` in the same loop had not returned after five minutes, which
+> is why the wall-clock tests *hung* on 3.11 rather than failing. The cluster was still
+> correct throughout (one leader, term 1, clean shutdown); it just burned the machine to
+> stay there, and only on the `WallClock` branch: everything on a `VirtualClock` — every
+> scenario, `stress`, `chaos`, `benchmark`, `replay` — always ran normally on 3.11.
+>
+> `asyncio.timeout_at` exists on every version this project supports and is what 3.12's
+> `wait_for` is built from, so using it directly gets the settled behaviour everywhere.
+> It also removes the `max(0.0, deadline - now())` arithmetic, which is the right shape:
+> `WallClock.now()` *is* `loop.time()`, the clock `timeout_at` measures against. The
+> `VirtualClock` race below is untouched — it still cannot use either primitive.
+>
+> Pre-existing, and reproducible on unmodified `HEAD`. Measured on Windows; CI's Linux
+> 3.11 job should confirm it there too.
+>
+> **Also fixed: four wall-clock tests that asserted timing-dependent details.** They
+> passed on 3.13 and failed on 3.11/3.12 while the cluster itself was healthy on all
+> three, so each was a fragile test rather than a broken cluster. Each is now pinned to
+> the precondition it actually depends on, with no assertion relaxed:
+>
+> - `test_a_rejoining_empty_node_records_why_it_rejected` wanted an empty node to reject
+>   the leader's first append, but that only happens while the leader's `next_index` for
+>   the peer is above 1. How far it had walked back while the peer was down is pure
+>   timing — at 1, `prev_log_index` is 0, which *any* log matches, so there was no
+>   rejection to find. The test now sets `next_index` explicitly.
+> - `test_every_node_agrees_on_the_term_and_the_leader` asserted immediately after
+>   `run_cluster`, which only waits for a leader to *exist*; a follower learns *who* it
+>   is one AppendEntries later. It now waits for that.
+> - Two crash-recovery cases slept a fixed `SETTLE` and sampled once, so a cluster
+>   mid-election read as having no leader. Both now poll, which is what `wait_until`'s
+>   own docstring argues for.
+> - `test_clock.py::test_wall_clock_sleep_until_waits_the_remaining_time` asserted an
+>   exact `>= 0.02`. On Windows `asyncio.sleep` returns up to ~5ms early against
+>   `loop.time()` for about 8% of sleeps (measured over 200), so this was testing timer
+>   granularity, not `sleep_until`.
+
 ### D10 — reads are served under a leader lease, not ReadIndex
 
 **Decision:** a `Get` never enters the log. The leader answers it from its local
@@ -213,6 +261,35 @@ The cost is an honest one, and worth naming: the lease trusts clocks not to drif
 between nodes. That is a real assumption a ReadIndex implementation would not need. In a
 simulation where every node reads the same `Clock` object it holds exactly; on real
 hardware it would need bounding.
+
+> **Superseded: the lease is gone, replaced by ReadIndex.** It could serve a stale read,
+> and in two separate ways.
+>
+> The narrow one: `_on_append_reply` dated each acknowledgement from when the *reply
+> landed*, while the follower reset its timer when it *processed the request* — a
+> reply-flight earlier — so every peer's window was credited about a round trip too long.
+> The structural one: even dated correctly, "a majority acked within `min_election_timeout`"
+> and "no challenger has been elected" are not the same window. The follower's timer runs
+> from when *it* last heard, and a challenger still has to win an election on top of that;
+> a lease that is merely not-obviously-expired spans both. `test_a_partitioned_leader_
+> refuses_to_serve_reads` catches exactly this — deterministically on 3.11/3.12, where a
+> partitioned leader answered a read after the majority side had already elected someone.
+>
+> Both are closed by `RaftNode._confirmed_leader_since`: a read is held until a majority
+> has acknowledged an AppendEntries sent *after that read arrived*. That compares two
+> events this node observed directly and needs no clock arithmetic and no drift
+> assumption, which is the whole reason §8 prefers it. `AppendEntries.sent_at`, echoed
+> back as `AppendEntriesReply.request_sent_at`, is what makes it implementable here — the
+> original objection to ReadIndex was that Figure 2's reply carries nothing to tag a
+> round trip with, and that is no longer true. `_handle_read` forces a fresh round rather
+> than reusing one already in flight, since a request sent before the read cannot confirm
+> it; overlapping requests are safe now that a reply says which one it answers.
+>
+> A first attempt at this was measured and backed out because it made linearizability
+> *worse* (5/32 seeds against 2/32). That reading was wrong: those failures were the
+> duplicate-apply bug in D10 below, which the attempt surfaced by letting far more reads
+> complete. With that fixed first, ReadIndex sweeps clean — 0/48 on the seeds where the
+> lease failed 2/48.
 
 ### D10 — a new leader commits a no-op immediately
 
@@ -565,7 +642,30 @@ open-ended random walk of faults, run for many trials, was the first thing to co
 "long enough," "busy enough," and "adversarial enough" all at once - which is the
 whole reason a chaos campaign exists rather than only ever running curated scenarios.
 
-### P8 — open issue: a possible 5th replication-safety bug, found but not yet fixed
+### P8 — open issue: a possible 5th replication-safety bug — RESOLVED
+
+> **Resolved.** It was explanation 1 below: `match_index[n2]` really was wrong. The
+> leader releases a peer's in-flight slot on `_reply_timeout` as well as on a reply, so
+> a reply that was merely *slow* rather than lost arrives after a second, larger request
+> has already gone out — and `handle_append_reply` credited it with `_inflight[peer]`,
+> the newer request's last index. The peer is then believed to hold entries it has never
+> seen, `advance_commit_index` counts a majority that does not exist, and the write is
+> acknowledged to a client that can still lose it.
+>
+> Explanation 2 (an election won on a log that should have lost it) is *not* what
+> happened; `candidate_log_is_up_to_date` and `advance_commit_index` both match §5.4
+> exactly.
+>
+> The fix is to stop guessing: `AppendEntriesReply` now carries `match_index`, the
+> follower's own statement of what it stored (`prev_log_index + len(entries)`), and
+> `handle_append_reply` credits that instead of what the leader remembers sending.
+> Attribution is then exact no matter how replies are delayed or reordered, which is
+> what real implementations do — etcd's `MsgAppResp` carries `Index` for this reason.
+> `tests/test_stale_reply.py` reproduces the over-crediting deterministically (the
+> leader credited a peer with 40 entries when it held 5) and fails without the fix.
+>
+> The single-in-flight guard in `_replicate_to` survives, but it is now only about not
+> flooding a peer with redundant traffic — no longer load-bearing for correctness.
 
 Flagged rather than fixed, on a deliberate call to stop chasing an increasingly rare
 case rather than open-endedly widen this phase's scope. **Exact repro:** `ChaosConfig

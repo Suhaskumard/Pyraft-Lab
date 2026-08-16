@@ -51,6 +51,13 @@ class AppendEntries(Message):
     prev_log_term: int
     entries: list[LogEntry] = Field(default_factory=list)
     leader_commit: int
+    sent_at: float = 0.0
+    """The leader's clock reading when this request went out, echoed back in the reply.
+
+    Beyond Figure 2, and the companion to ``AppendEntriesReply.match_index``: it lets a
+    leader date an acknowledgement by *the request it answers* rather than by when the
+    reply happened to land. The read lease needs that - see ``RaftNode._has_lease``.
+    """
 
 
 class AppendEntriesReply(Message):
@@ -58,6 +65,23 @@ class AppendEntriesReply(Message):
 
     term: int
     success: bool
+    match_index: int = 0
+    """The highest index this reply proves the follower's log matches the leader's.
+
+    Beyond Figure 2, which carries only ``term`` and ``success``. That minimal reply
+    cannot say *which* request it answers, so a leader with more than one outstanding
+    to a peer has to guess - and guessing "the last one I sent" credits a slow reply
+    with a later request's entries, advancing ``matchIndex`` past what the follower
+    actually stored (docs/architecture.md P8's fifth bug). Carrying the index makes
+    attribution exact and reordering harmless, which is what real implementations do
+    (etcd's ``MsgAppResp`` carries ``Index``). Meaningful only when ``success``.
+    """
+    request_sent_at: float = 0.0
+    """``AppendEntries.sent_at`` echoed straight back, success or not.
+
+    Echoed rather than re-read from a clock so it means the same thing on both sides:
+    the leader's own reading when it sent the request this reply answers.
+    """
 
 
 def handle_request_vote(state: RaftState, msg: RequestVote) -> RequestVoteReply:
@@ -96,18 +120,31 @@ def handle_append_entries(state: RaftState, msg: AppendEntries) -> AppendEntries
     state.observe_term(msg.term)
 
     if msg.term < state.current_term:
-        return AppendEntriesReply(term=state.current_term, success=False)
+        return AppendEntriesReply(
+            term=state.current_term, success=False, request_sent_at=msg.sent_at
+        )
 
     # A valid AppendEntries for the current term proves a leader exists for it: a
     # candidate must return to follower (paper §5.2), and a follower simply stays one.
     state.role = Role.FOLLOWER
 
     if not state.log.has_entry(msg.prev_log_index, msg.prev_log_term):
-        return AppendEntriesReply(term=state.current_term, success=False)
+        return AppendEntriesReply(
+            term=state.current_term, success=False, request_sent_at=msg.sent_at
+        )
 
     state.log.append_new_entries(msg.entries)
 
     if msg.leader_commit > state.commit_index:
         state.commit_index = min(msg.leader_commit, state.log.last_index)
 
-    return AppendEntriesReply(term=state.current_term, success=True)
+    # What this reply proves, stated by the node that actually stored it: the request's
+    # prefix matched at prev_log_index and its entries are now appended. Not
+    # ``log.last_index`` - entries beyond this request's reach may be a stale tail this
+    # leader has not overwritten yet, which it must not be credited with.
+    return AppendEntriesReply(
+        term=state.current_term,
+        success=True,
+        match_index=msg.prev_log_index + len(msg.entries),
+        request_sent_at=msg.sent_at,
+    )

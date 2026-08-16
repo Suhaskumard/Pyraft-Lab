@@ -480,6 +480,12 @@ def test_cli_reports_a_corrupt_wal_without_pretending_to_recover_it(wal_path: Pa
     assert repaired.exit_code == 0
     assert "discarded" in repaired.stdout
 
+    # The repair has to reach the file: a second read must find it clean, or --repair
+    # only ever described a truncation it never performed.
+    again = runner.invoke(app, ["inspect-wal", str(wal_path)])
+    assert again.exit_code == 0
+    assert "WAL corrupt:" not in again.stdout
+
 
 def test_cli_lists_the_records_when_asked(wal_path: Path) -> None:
     wal = open_wal(wal_path)

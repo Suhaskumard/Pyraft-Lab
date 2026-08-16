@@ -201,8 +201,11 @@ async def test_lifecycle_wait_for_leader_reusable_standalone() -> None:
     ids = ["n1", "n2", "n3"]
     nodes = [
         RaftNode(
-            node_id=node_id, peers=ids, transport=bus,
-            election_timeout_range=FAST_ELECTION, heartbeat_interval=FAST_HEARTBEAT,
+            node_id=node_id,
+            peers=ids,
+            transport=bus,
+            election_timeout_range=FAST_ELECTION,
+            heartbeat_interval=FAST_HEARTBEAT,
         )
         for node_id in ids
     ]
@@ -222,8 +225,11 @@ async def test_lifecycle_wait_for_leader_times_out() -> None:
     # A lone node whose peer list names someone who never starts: it can never see a
     # majority of a 2-node cluster, so it campaigns forever without winning.
     node = RaftNode(
-        node_id="n1", peers=["n1", "n2"], transport=bus,
-        election_timeout_range=FAST_ELECTION, heartbeat_interval=FAST_HEARTBEAT,
+        node_id="n1",
+        peers=["n1", "n2"],
+        transport=bus,
+        election_timeout_range=FAST_ELECTION,
+        heartbeat_interval=FAST_HEARTBEAT,
     )
     node.start()
 

@@ -18,13 +18,38 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyraft_lab.kv.commands import Cas, Command, Delete, Get, Put, command_from_wire
+from pyraft_lab.kv.commands import (
+    SESSION_CLIENT,
+    SESSION_SERIAL,
+    Cas,
+    Command,
+    Delete,
+    Get,
+    Put,
+    command_from_wire,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     # Type-only: the state machine reads a log but must not depend on the consensus
     # layer at runtime. Importing it eagerly would also close a cycle, since raft/
     # imports this module to drive it.
     from pyraft_lab.raft.log import RaftLog
+
+
+def _session_of(command: Any) -> tuple[str | None, int | None]:
+    """The (client, serial) a logged command was stamped with, if any.
+
+    Absent for commands submitted straight through ``RaftNode.submit`` - internal
+    writes and every test that drives the store directly - which then apply unchanged.
+    Deduplication is only meaningful for a request some client might retry.
+    """
+    if not isinstance(command, dict):
+        return None, None
+    client = command.get(SESSION_CLIENT)
+    serial = command.get(SESSION_SERIAL)
+    if not isinstance(client, str) or not isinstance(serial, int):
+        return None, None
+    return client, serial
 
 
 @dataclass(frozen=True)
@@ -47,6 +72,18 @@ class KVStore:
 
     _data: dict[str, Any] = field(default_factory=dict, repr=False)
     last_applied: int = 0
+
+    _sessions: dict[str, tuple[int, Result]] = field(default_factory=dict, repr=False)
+    """Per client: the highest request serial applied, and what it answered.
+
+    Paper §6.3. Rule 2 above makes a *log entry* apply exactly once, but a client whose
+    reply is lost retries the same request, and the new leader appends it again - a
+    second, distinct entry carrying the same intent. Applying both is not a replay, it
+    is the write happening twice, and the damage is not limited to duplicated work: the
+    retry lands after whatever was written in between, so an overwritten value comes
+    back to life. That is a linearizability violation with no lost data and no diverged
+    log, which is exactly how it hid (docs/architecture.md D10).
+    """
 
     # --- reads that do not go through the log ------------------------------------
 
@@ -103,6 +140,20 @@ class KVStore:
             # A no-op entry. Some Raft implementations append one on election; ours does
             # not yet, but the log format permits it and applying it must be harmless.
             return Result(ok=True, index=index)
+
+        client, serial = _session_of(command)
+        if client is not None and serial is not None:
+            seen = self._sessions.get(client)
+            if seen is not None and serial <= seen[0]:
+                # Already applied for this client. Answer with what it answered the
+                # first time rather than running the command again: the client is owed
+                # the result of its one request, and re-running would overwrite whatever
+                # has legitimately been written since.
+                return Result(ok=seen[1].ok, value=seen[1].value, index=index)
+            result = self._dispatch(command_from_wire(command), index)
+            self._sessions[client] = (serial, result)
+            return result
+
         return self._dispatch(command_from_wire(command), index)
 
     def _dispatch(self, command: Command, index: int) -> Result:

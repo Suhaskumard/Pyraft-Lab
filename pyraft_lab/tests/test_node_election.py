@@ -102,6 +102,12 @@ async def test_every_node_agrees_on_the_term_and_the_leader(bus: InMemoryBus) ->
 
     try:
         leader = leaders(nodes)[0]
+        # ``run_cluster`` waits for a leader to *exist*; a follower only learns *who* it
+        # is from that leader's first AppendEntries, which is a further round away. Wait
+        # for that to land rather than assuming it already has - the assertion below is
+        # unchanged, it just no longer races the heartbeat it always depended on.
+        assert await wait_until(lambda: all(n.leader_id == leader.node_id for n in nodes))
+
         assert {n.current_term for n in nodes} == {leader.current_term}
         assert {n.leader_id for n in nodes} == {leader.node_id}
     finally:
@@ -156,7 +162,12 @@ async def test_a_new_leader_is_elected_after_the_leader_crashes(bus: InMemoryBus
         await original.stop()  # crash: it leaves the bus and stops heartbeating
         alive = [n for n in nodes if n is not original]
 
-        await asyncio.sleep(SETTLE)
+        # Poll rather than sleep a fixed SETTLE and sample once: the survivors may still
+        # be mid-election at that instant - two nodes on a 50-100ms randomized timeout
+        # can split a vote and go round again - and a single sample then reads zero
+        # leaders for a cluster that elects one a few milliseconds later. Same assertion,
+        # just not pinned to one arbitrary moment (see ``wait_until``'s own docstring).
+        assert await wait_until(lambda: len(leaders(alive)) == 1)
 
         assert len(leaders(alive)) == 1
         assert leaders(alive)[0].current_term > original_term
@@ -219,7 +230,10 @@ async def test_the_cluster_recovers_repeatedly_across_successive_crashes(bus: In
             leader = leaders(alive)[0]
             await leader.stop()
             alive = [n for n in alive if n is not leader]
-            await asyncio.sleep(SETTLE)
+            # Poll rather than sleep a fixed SETTLE and sample once - the survivors can
+            # still be mid-election at that instant, and a single sample then reads zero
+            # leaders for a cluster that elects one moments later.
+            assert await wait_until(lambda survivors=alive: len(leaders(survivors)) == 1)
 
             assert len(leaders(alive)) == 1  # 4 then 3 nodes: still a quorum
     finally:

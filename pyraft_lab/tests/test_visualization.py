@@ -30,8 +30,11 @@ A_SCENARIO = Scenario.from_dict(
             {"at": 3.0, "action": "heal_partition"},
         ],
         "workload": {
-            "type": "put_get_mix", "puts_per_sec": 15, "get_ratio": 0.5,
-            "keys": 3, "clients": 1,
+            "type": "put_get_mix",
+            "puts_per_sec": 15,
+            "get_ratio": 0.5,
+            "keys": 3,
+            "clients": 1,
         },
     }
 )
@@ -61,20 +64,26 @@ async def test_plot_consistency_availability_alone(tmp_path: Path) -> None:
 
 def _fake_cell(nodes: int, loss_rate: float) -> BenchmarkCell:
     return BenchmarkCell(
-        nodes=nodes, loss_rate=loss_rate, seed=0, run_id="x",
-        throughput_per_sec=10.0, latency_p50_ms=5.0, latency_p95_ms=15.0,
-        latency_p99_ms=25.0, election_time_ms=100.0, recovery_time_ms=200.0,
-        cpu_seconds=0.1, peak_memory_mb=1.0, data_loss=False, duration_sec=10.0,
+        nodes=nodes,
+        loss_rate=loss_rate,
+        seed=0,
+        run_id="x",
+        throughput_per_sec=10.0,
+        latency_p50_ms=5.0,
+        latency_p95_ms=15.0,
+        latency_p99_ms=25.0,
+        election_time_ms=100.0,
+        recovery_time_ms=200.0,
+        cpu_seconds=0.1,
+        peak_memory_mb=1.0,
+        data_loss=False,
+        duration_sec=10.0,
         persisted_at=None,
     )
 
 
 def test_plot_benchmark_writes_four_comparison_graphs(tmp_path: Path) -> None:
-    cells = [
-        _fake_cell(nodes, loss_rate)
-        for nodes in (3, 5)
-        for loss_rate in (0.0, 0.10)
-    ]
+    cells = [_fake_cell(nodes, loss_rate) for nodes in (3, 5) for loss_rate in (0.0, 0.10)]
     report = BenchmarkReport(
         config=BenchmarkConfig(node_counts=(3, 5), loss_rates=(0.0, 0.10)), cells=cells
     )
@@ -85,6 +94,8 @@ def test_plot_benchmark_writes_four_comparison_graphs(tmp_path: Path) -> None:
     assert all(_non_empty(p) for p in paths)
     names = {p.stem for p in paths}
     assert names == {
-        "benchmark-throughput", "benchmark-latency",
-        "benchmark-election-recovery", "benchmark-resources",
+        "benchmark-throughput",
+        "benchmark-latency",
+        "benchmark-election-recovery",
+        "benchmark-resources",
     }

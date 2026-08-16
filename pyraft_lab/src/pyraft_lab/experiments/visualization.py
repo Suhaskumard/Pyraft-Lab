@@ -220,7 +220,11 @@ def plot_consistency_availability(result: RunResult, path: Path) -> Path:
     for index, (node_id, points) in enumerate(sorted(series.items())):
         xs, ys = zip(*points, strict=True)
         top.step(
-            xs, ys, where="post", label=node_id, linewidth=1.3,
+            xs,
+            ys,
+            where="post",
+            label=node_id,
+            linewidth=1.3,
             color=LEADER_COLORS[index % len(LEADER_COLORS)],
         )
     top.set_ylabel("commit index")
@@ -300,7 +304,10 @@ def _plot_benchmark_series(
                 continue
             xs, ys = zip(*points, strict=True)
             axis.plot(
-                xs, ys, marker="o", label=f"{nodes} nodes",
+                xs,
+                ys,
+                marker="o",
+                label=f"{nodes} nodes",
                 color=LEADER_COLORS[index % len(LEADER_COLORS)],
             )
         axis.set_ylabel(ylabel)
@@ -334,7 +341,9 @@ def plot_benchmark(report: Any, directory: str | Path) -> list[Path]:
 
     return [
         _plot_benchmark_series(
-            by_nodes, directory / f"benchmark-{name}.png", fields,
+            by_nodes,
+            directory / f"benchmark-{name}.png",
+            fields,
             title=f"{name.replace('-', ' & ')} vs packet loss",
         )
         for name, fields in _BENCHMARK_METRICS.items()

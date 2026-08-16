@@ -24,6 +24,7 @@ from the Python API.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -91,6 +92,12 @@ def inspect_wal(
 
     for line in recovery.report_lines():
         typer.echo(line)
+
+    # read_wal never writes, so --repair has to persist the truncation itself - the same
+    # one WriteAheadLog.recover does - or the next read finds the damage still there.
+    if repair and recovery.discarded:
+        os.truncate(path, recovery.valid_bytes)
+        typer.echo(f"repaired {path}: truncated to {recovery.valid_bytes} bytes")
 
     if records:
         typer.echo("")
@@ -231,7 +238,10 @@ def stress(
         raise typer.Exit(2) from exc
 
     config = StressConfig(
-        nodes=nodes, trial_duration=trial_duration, trials=trials, base_seed=seed,
+        nodes=nodes,
+        trial_duration=trial_duration,
+        trials=trials,
+        base_seed=seed,
         results_dir=results_dir,
     )
     campaign = asyncio.run(run_stress(config))
@@ -278,7 +288,10 @@ def chaos(
         raise typer.Exit(2) from exc
 
     config = ChaosConfig(
-        nodes=nodes, trial_duration=trial_duration, trials=trials, base_seed=seed,
+        nodes=nodes,
+        trial_duration=trial_duration,
+        trials=trials,
+        base_seed=seed,
         results_dir=results_dir,
     )
     campaign = asyncio.run(run_chaos(config))
@@ -339,8 +352,11 @@ def benchmark(
         raise typer.Exit(2)
 
     config = BenchmarkConfig(
-        node_counts=node_counts, loss_rates=loss_rates, trial_duration=trial_duration,
-        base_seed=seed, results_dir=results_dir,
+        node_counts=node_counts,
+        loss_rates=loss_rates,
+        trial_duration=trial_duration,
+        base_seed=seed,
+        results_dir=results_dir,
     )
     campaign = asyncio.run(run_benchmark(config))
     typer.echo(campaign.summary())

@@ -255,8 +255,7 @@ class ChaosReport:
                     f"  seed={trial.seed}  {tag}"
                 )
                 lines.append(
-                    f"    pyraft-lab replay {trial.run_id}"
-                    f" --results-dir {self.config.results_dir}"
+                    f"    pyraft-lab replay {trial.run_id} --results-dir {self.config.results_dir}"
                 )
         return "\n".join(lines)
 

@@ -174,6 +174,20 @@ def replication_lag(events: list[Event], nodes: list[NodeId]) -> dict[str, Any]:
 # --- safety -----------------------------------------------------------------------------
 
 
+def _intent(command: Any) -> Any:
+    """A logged command reduced to what it asks for, dropping session bookkeeping.
+
+    ``RaftNode`` stamps ``_client``/``_serial`` onto a client's write so the state
+    machine can recognise a retry (paper §6.3, ``KVStore._sessions``). Those keys say
+    *who asked*, not what was written, so a comparison against the operation a client
+    recorded has to ignore them - otherwise every acknowledged write looks absent from
+    the log and the run reports total data loss that did not happen.
+    """
+    if isinstance(command, dict):
+        return {k: v for k, v in command.items() if not k.startswith("_")}
+    return command
+
+
 def lost_writes(history: History, surviving: list[Any]) -> list[dict[str, Any]]:
     """Acknowledged writes that are missing from the cluster's surviving log.
 
@@ -185,7 +199,7 @@ def lost_writes(history: History, surviving: list[Any]) -> list[dict[str, Any]]:
     Writes the client never got an answer for are excluded - the cluster promised
     nothing about those, and losing one is not a broken promise.
     """
-    committed = {json.dumps(command, sort_keys=True) for command in surviving}
+    committed = {json.dumps(_intent(command), sort_keys=True) for command in surviving}
     lost = []
 
     for op in history.operations:

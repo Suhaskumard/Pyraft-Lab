@@ -214,8 +214,20 @@ async def race_deadline(clock: Clock, awaitable: Awaitable[T], deadline: float) 
     will ever await it again.
     """
     if isinstance(clock, WallClock):
+        # ``timeout_at``, not ``wait_for``: on Python 3.11 ``wait_for`` is the older
+        # implementation, and here it fails to settle - the receive loop wakes far more
+        # often than its deadline asks for, hard enough to starve the event loop. One
+        # idle second of a 3-node cluster put 10,628 messages on the bus under 3.11
+        # against 204 under 3.13. 3.12 reimplemented ``wait_for`` on top of
+        # ``asyncio.timeout``, which is why only 3.11 shows it; using the newer
+        # primitive directly gets that behaviour on every supported version.
+        #
+        # An absolute deadline also drops the ``max(0.0, deadline - now())`` arithmetic
+        # this used to need, which is exactly right: ``WallClock.now()`` *is*
+        # ``loop.time()``, the clock ``timeout_at`` measures against.
         try:
-            return await asyncio.wait_for(awaitable, max(0.0, deadline - clock.now()))
+            async with asyncio.timeout_at(deadline):
+                return await awaitable
         except TimeoutError:
             return None
 

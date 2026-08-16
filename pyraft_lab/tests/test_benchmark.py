@@ -57,11 +57,17 @@ def test_lossy_cell_carries_a_packet_loss_fault_from_the_start() -> None:
 
 def test_generating_the_same_cell_twice_is_identical() -> None:
     first = benchmark_scenario(
-        nodes=5, loss_rate=0.05, duration=12.0, seed=cell_seed(2, 5, 0.05),
+        nodes=5,
+        loss_rate=0.05,
+        duration=12.0,
+        seed=cell_seed(2, 5, 0.05),
         workload=WorkloadConfig(),
     )
     second = benchmark_scenario(
-        nodes=5, loss_rate=0.05, duration=12.0, seed=cell_seed(2, 5, 0.05),
+        nodes=5,
+        loss_rate=0.05,
+        duration=12.0,
+        seed=cell_seed(2, 5, 0.05),
         workload=WorkloadConfig(),
     )
     assert first.to_dict() == second.to_dict()
@@ -81,23 +87,37 @@ async def test_run_benchmark_produces_one_cell_per_combination() -> None:
 
 
 async def test_every_cell_reports_the_full_metric_set() -> None:
-    config = BenchmarkConfig(
-        node_counts=(3,), loss_rates=(0.0,), trial_duration=3.0, base_seed=2
-    )
+    config = BenchmarkConfig(node_counts=(3,), loss_rates=(0.0,), trial_duration=3.0, base_seed=2)
 
     report = await run_benchmark(config)
     document = report.to_dict()
 
     assert set(document) >= {
-        "node_counts", "loss_rates", "trial_duration_sec", "base_seed",
-        "cells", "data_loss_cells", "results",
+        "node_counts",
+        "loss_rates",
+        "trial_duration_sec",
+        "base_seed",
+        "cells",
+        "data_loss_cells",
+        "results",
     }
     cell = document["results"][0]
     assert set(cell) >= {
-        "nodes", "loss_rate", "seed", "run_id", "throughput_per_sec",
-        "latency_p50_ms", "latency_p95_ms", "latency_p99_ms",
-        "election_time_ms", "recovery_time_ms", "cpu_seconds", "peak_memory_mb",
-        "data_loss", "duration_sec", "persisted_at",
+        "nodes",
+        "loss_rate",
+        "seed",
+        "run_id",
+        "throughput_per_sec",
+        "latency_p50_ms",
+        "latency_p95_ms",
+        "latency_p99_ms",
+        "election_time_ms",
+        "recovery_time_ms",
+        "cpu_seconds",
+        "peak_memory_mb",
+        "data_loss",
+        "duration_sec",
+        "persisted_at",
     }
     # The initial election in every run's _settle() always gives election_time_ms a
     # sample; the crash/recover pair benchmark_scenario adds always gives recovery one.
@@ -106,9 +126,7 @@ async def test_every_cell_reports_the_full_metric_set() -> None:
 
 
 async def test_cpu_and_memory_are_actually_measured() -> None:
-    config = BenchmarkConfig(
-        node_counts=(3,), loss_rates=(0.0,), trial_duration=3.0, base_seed=3
-    )
+    config = BenchmarkConfig(node_counts=(3,), loss_rates=(0.0,), trial_duration=3.0, base_seed=3)
 
     report = await run_benchmark(config)
     cell = report.cells[0]
@@ -139,7 +157,10 @@ async def test_a_data_loss_cell_is_persisted_and_a_clean_one_is_not(
     monkeypatch.setattr(benchmark.metrics, "report", fake_report)
 
     config = BenchmarkConfig(
-        node_counts=(3,), loss_rates=(0.0, 0.05), trial_duration=1.0, base_seed=4,
+        node_counts=(3,),
+        loss_rates=(0.0, 0.05),
+        trial_duration=1.0,
+        base_seed=4,
         results_dir=tmp_path,
     )
     report = await run_benchmark(config)
@@ -158,10 +179,20 @@ def test_summary_includes_every_cell() -> None:
 
     config = BenchmarkConfig(node_counts=(3,), loss_rates=(0.0,), base_seed=0)
     cell = BenchmarkCell(
-        nodes=3, loss_rate=0.0, seed=1, run_id="abc123",
-        throughput_per_sec=9.5, latency_p50_ms=12.0, latency_p95_ms=25.0,
-        latency_p99_ms=40.0, election_time_ms=150.0, recovery_time_ms=None,
-        cpu_seconds=0.5, peak_memory_mb=2.0, data_loss=False, duration_sec=15.0,
+        nodes=3,
+        loss_rate=0.0,
+        seed=1,
+        run_id="abc123",
+        throughput_per_sec=9.5,
+        latency_p50_ms=12.0,
+        latency_p95_ms=25.0,
+        latency_p99_ms=40.0,
+        election_time_ms=150.0,
+        recovery_time_ms=None,
+        cpu_seconds=0.5,
+        peak_memory_mb=2.0,
+        data_loss=False,
+        duration_sec=15.0,
         persisted_at=None,
     )
     text = BenchmarkReport(config=config, cells=[cell]).summary()

@@ -54,9 +54,12 @@ def test_init_writes_a_default_config_and_directories(tmp_path: Path) -> None:
         app,
         [
             "init",
-            "--config", str(tmp_path / "cluster.yaml"),
-            "--scenarios-dir", str(tmp_path / "scenarios"),
-            "--results-dir", str(tmp_path / "results"),
+            "--config",
+            str(tmp_path / "cluster.yaml"),
+            "--scenarios-dir",
+            str(tmp_path / "scenarios"),
+            "--results-dir",
+            str(tmp_path / "results"),
         ],
     )
 
@@ -70,9 +73,12 @@ def test_init_does_not_overwrite_an_existing_config(tmp_path: Path) -> None:
     config = tmp_path / "cluster.yaml"
     args = [
         "init",
-        "--config", str(config),
-        "--scenarios-dir", str(tmp_path / "scenarios"),
-        "--results-dir", str(tmp_path / "results"),
+        "--config",
+        str(config),
+        "--scenarios-dir",
+        str(tmp_path / "scenarios"),
+        "--results-dir",
+        str(tmp_path / "results"),
     ]
 
     assert runner.invoke(app, args).exit_code == 0
@@ -133,9 +139,12 @@ def test_results_lists_persisted_runs(tmp_path: Path) -> None:
     results_dir = tmp_path / "results"
 
     for _ in range(2):
-        assert runner.invoke(
-            app, ["run", "--scenario", str(scenario), "--results-dir", str(results_dir)]
-        ).exit_code == 0
+        assert (
+            runner.invoke(
+                app, ["run", "--scenario", str(scenario), "--results-dir", str(results_dir)]
+            ).exit_code
+            == 0
+        )
 
     result = runner.invoke(app, ["results", "--results-dir", str(results_dir)])
 
@@ -252,9 +261,13 @@ def test_run_plot_writes_the_four_plots(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "run", "--scenario", str(scenario),
-            "--results-dir", str(tmp_path / "results"),
-            "--plot", str(plot_dir),
+            "run",
+            "--scenario",
+            str(scenario),
+            "--results-dir",
+            str(tmp_path / "results"),
+            "--plot",
+            str(plot_dir),
         ],
     )
 
@@ -292,12 +305,18 @@ def test_benchmark_writes_a_report_and_graphs_for_every_cell(tmp_path: Path) -> 
         app,
         [
             "benchmark",
-            "--nodes", "3,5",
-            "--loss", "0,10",
-            "--duration", "2s",
-            "--results-dir", str(tmp_path / "results"),
-            "--output-dir", str(output_dir),
-            "--report", str(tmp_path / "benchmark-report.json"),
+            "--nodes",
+            "3,5",
+            "--loss",
+            "0,10",
+            "--duration",
+            "2s",
+            "--results-dir",
+            str(tmp_path / "results"),
+            "--output-dir",
+            str(output_dir),
+            "--report",
+            str(tmp_path / "benchmark-report.json"),
         ],
     )
 
@@ -314,8 +333,15 @@ def test_benchmark_rejects_an_empty_nodes_or_loss_list(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "benchmark", "--nodes", "", "--loss", "0",
-            "--report", str(tmp_path / "r.json"), "--output-dir", str(tmp_path / "g"),
+            "benchmark",
+            "--nodes",
+            "",
+            "--loss",
+            "0",
+            "--report",
+            str(tmp_path / "r.json"),
+            "--output-dir",
+            str(tmp_path / "g"),
         ],
     )
     assert result.exit_code == 2

@@ -30,7 +30,11 @@ def a_scenario(**overrides: object) -> Scenario:
         "nodes": 3,
         "seed": 11,
         "workload": {
-            "type": "put_get_mix", "puts_per_sec": 20, "get_ratio": 0.5, "keys": 3, "clients": 2,
+            "type": "put_get_mix",
+            "puts_per_sec": 20,
+            "get_ratio": 0.5,
+            "keys": 3,
+            "clients": 2,
         },
     }
     data.update(overrides)

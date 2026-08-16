@@ -26,7 +26,7 @@ import random
 
 from pyraft_lab import NodeId
 from pyraft_lab.client.client import ClientReply, ClientRequest
-from pyraft_lab.kv.commands import Get
+from pyraft_lab.kv.commands import SESSION_CLIENT, SESSION_SERIAL, Get
 from pyraft_lab.kv.store import KVStore, Result
 from pyraft_lab.network.bus import Inbox, Transport
 from pyraft_lab.network.clock import Clock, WallClock, race_deadline
@@ -65,6 +65,24 @@ from pyraft_lab.raft.snapshot import (
     SnapshotStore,
 )
 from pyraft_lab.raft.state import RaftState, Role
+
+
+def _serial_of(request_id: str) -> int | None:
+    """The monotonic counter inside a ``KVClient`` request id (``"client1-117"`` -> 117).
+
+    §6.3's session table needs an ordering over one client's requests, and the client
+    already has one: ``_call`` numbers each request once and reuses that number for
+    every retry of it. Reading it back here keeps the dedup entirely inside the server,
+    so no client change is needed for it to work.
+
+    ``None`` for any id that is not in that shape - a hand-built request in a test, say.
+    Those simply do not get deduplicated, which is the same behaviour as before.
+    """
+    _, _, tail = request_id.rpartition("-")
+    try:
+        return int(tail)
+    except ValueError:
+        return None
 
 
 class RaftNode:
@@ -114,20 +132,15 @@ class RaftNode:
         # recomputed as "now + heartbeat_interval" at the top of the loop.
         self._next_heartbeat_at = 0.0
 
-        # Highest log index currently in flight to each peer. Figure 2's reply carries
-        # no index, so the leader has to remember what it sent to interpret a success.
-        self._inflight: dict[NodeId, int] = {}
-
         # When an AppendEntries to a peer was sent and has not yet been answered.
-        # Because a reply carries no index (D4), this value is only interpretable while
-        # at most one request to a given peer is outstanding - two in flight at once
-        # makes it ambiguous which one a given reply is *for*, and blindly crediting
-        # the later (larger) one to an earlier reply can advance matchIndex past what
-        # that peer has actually durably appended (see docs/architecture.md P8). So
-        # ``_replicate_to`` skips a peer that is already awaiting a reply, and this is
-        # cleared only when that reply arrives - or after ``_reply_timeout`` with no
-        # reply at all, since a genuinely lost request or reply must not stall this
-        # peer's replication forever.
+        # ``_replicate_to`` skips a peer already awaiting a reply, and this is cleared
+        # when that reply arrives - or after ``_reply_timeout`` with no reply at all,
+        # since a genuinely lost request or reply must not stall this peer's
+        # replication forever. This used to be load-bearing for *correctness*: a reply
+        # carried no index, so crediting one meant guessing which request it answered,
+        # and the timeout above reopened exactly that ambiguity (docs/architecture.md
+        # P8's fifth bug). ``AppendEntriesReply.match_index`` now says so directly, so
+        # this guard is only about not flooding a peer with redundant traffic.
         self._awaiting_reply: dict[NodeId, float] = {}
         # Exactly one heartbeat_interval, not several: this only needs to be long
         # enough that the handful of reactive resends a single burst of client writes
@@ -151,7 +164,7 @@ class RaftNode:
 
         # Reads pending a lease confirmation and/or commit-index catch-up (Day 10):
         # (client, request_id, key, read_index).
-        self._pending_reads: list[tuple[NodeId, str, str, int]] = []
+        self._pending_reads: list[tuple[NodeId, str, str, int, float]] = []
 
         # Per-peer clock time of its last successful AppendEntries reply in the
         # current term - the leader lease Day 10's reads are served against.
@@ -599,7 +612,6 @@ class RaftNode:
 
     def _on_append_reply(self, peer: NodeId, reply: AppendEntriesReply) -> None:
         if self.state.observe_term(reply.term):
-            self._inflight.clear()
             self._awaiting_reply.clear()
             return
 
@@ -613,19 +625,30 @@ class RaftNode:
         if self.state.role is not Role.LEADER:
             return
 
-        # This reply is - by the single-in-flight invariant _replicate_to maintains -
-        # unambiguously the answer to the one request we had outstanding to this peer,
-        # so _inflight[peer] is safe to interpret as what it confirms. Cleared before
-        # acting on it so a retry decided below is free to send immediately rather than
-        # being skipped as "already awaiting a reply".
+        # What this reply confirms is carried in the reply itself, so it no longer
+        # matters whether it answers the request we last sent or an earlier one whose
+        # slot we timed out. Cleared before acting on it so a retry decided below is
+        # free to send immediately rather than being skipped as "already awaiting a
+        # reply".
         self._awaiting_reply.pop(peer, None)
-        handle_append_reply(self.state, peer, reply, self._inflight.get(peer, 0))
+        handle_append_reply(self.state, peer, reply)
 
         if reply.success:
             # Proof of life for the lease (Day 10): this peer has just processed an
             # AppendEntries from us in our current term, which - per the follower's
             # own reset rule in ``_dispatch`` - reset its election timer.
-            self._last_heartbeat_ack[peer] = self._clock.now()
+            # Dated by the request this reply answers (echoed back as
+            # ``request_sent_at``), never by when the reply landed. The lease needs a
+            # lower bound on when this peer's election timer was reset, and all the
+            # leader knows is that it happened somewhere in the request's flight.
+            # Arrival time picks the latest instant in that window, stretching the lease
+            # by a whole round trip - long enough, under injected latency, for a
+            # partitioned leader to answer a read after a new leader has been elected.
+            # max() stops a reordered older reply pulling the mark backwards.
+            self._last_heartbeat_ack[peer] = max(
+                self._last_heartbeat_ack.get(peer, float("-inf")),
+                reply.request_sent_at,
+            )
             # Still behind? Send the next batch straight away rather than waiting for
             # the heartbeat tick - this is what makes catch-up fast.
             if self.state.next_index.get(peer, 0) <= self.state.log.last_index:
@@ -680,36 +703,62 @@ class RaftNode:
             self._handle_read(src, request)
             return
 
-        self.submit(request.command, reply_to=(src, request.request_id))
+        # Stamp who asked and which request this is, so the state machine can tell a
+        # retry from a new write (paper §6.3). Without it a client that retries after a
+        # lost reply gets its write appended twice, and the second copy lands *after*
+        # whatever was written in between - resurrecting an overwritten value. See
+        # KVStore._sessions.
+        command = request.command
+        serial = _serial_of(request.request_id)
+        if isinstance(command, dict) and serial is not None:
+            command = {**command, SESSION_CLIENT: src, SESSION_SERIAL: serial}
+
+        self.submit(command, reply_to=(src, request.request_id))
 
     # --- linearizable reads (Day 10) ----------------------------------------------
     #
     # A read never touches the log: ``KVStore.read`` is already local and instant, so
     # the only thing standing between it and linearizability is proving this node is
-    # still the leader as of the read. Rather than paper §8's ReadIndex - which needs
-    # a round trip tagged well enough to survive reordering, and Figure 2's
-    # AppendEntriesReply deliberately carries nothing to tag it with (see
-    # docs/architecture.md D4) - a read is instead served once a majority of peers
-    # have acknowledged an AppendEntries in this term within the last
-    # ``election_timeout_range[0]`` seconds: since a follower's own randomly chosen
-    # timeout is never shorter than that minimum, nobody could have voted for a
-    # challenger since. ``_win_election``'s no-op commit closes the other half of the
-    # gap: it is what lets ``commit_index`` (and so ``read_index``) catch up to the
-    # true committed state after a failover, rather than sitting frozen at whatever a
-    # since-deposed leader last advertised.
+    # still the leader as of the read. That is paper §8's ReadIndex, and it is what
+    # ``_confirmed_leader_since`` does: hold the read until a majority has acknowledged
+    # an AppendEntries this node sent *after* the read arrived.
+    #
+    # This used to be a time-based lease - "a majority acked within
+    # ``election_timeout_range[0]``, and a follower's own timeout is never shorter than
+    # that, so nobody can have voted since". It let a partitioned leader answer a read
+    # after a new leader had already been elected on the other side, because the two
+    # windows are not the same window: the follower's timer runs from when *it* last
+    # heard, the challenger still has to win an election, and a lease that is merely
+    # "not obviously expired" spans both. Requiring an acknowledgement newer than the
+    # read itself compares two events this node observed directly and needs no clock
+    # arithmetic at all (docs/architecture.md D10).
+    #
+    # ``_win_election``'s no-op commit closes the other half of the gap: it is what lets
+    # ``commit_index`` (and so ``read_index``) catch up to the true committed state
+    # after a failover, rather than sitting frozen at whatever a since-deposed leader
+    # last advertised.
 
     def _handle_read(self, src: NodeId, request: ClientRequest) -> None:
         key = request.command["key"]
-        self._pending_reads.append((src, request.request_id, key, self.state.commit_index))
+        self._pending_reads.append(
+            (src, request.request_id, key, self.state.commit_index, self._now())
+        )
+        # Start the confirming round now rather than waiting for the heartbeat tick, and
+        # force it past the in-flight guard: a request already on its way was sent before
+        # this read arrived, so its reply can never confirm this read.
+        self._broadcast_heartbeat(force=True)
         self._try_serve_reads()
 
     def _try_serve_reads(self) -> None:
-        if not self._pending_reads or not self._has_lease():
+        if not self._pending_reads or self.state.role is not Role.LEADER:
             return
 
-        still_pending: list[tuple[NodeId, str, str, int]] = []
-        for client, request_id, key, read_index in self._pending_reads:
-            if self.state.last_applied >= read_index:
+        still_pending: list[tuple[NodeId, str, str, int, float]] = []
+        for client, request_id, key, read_index, registered_at in self._pending_reads:
+            ready = self._confirmed_leader_since(registered_at) and (
+                self.state.last_applied >= read_index
+            )
+            if ready:
                 self._send(
                     client,
                     ClientReply(
@@ -717,23 +766,23 @@ class RaftNode:
                     ),
                 )
             else:
-                still_pending.append((client, request_id, key, read_index))
+                still_pending.append((client, request_id, key, read_index, registered_at))
         self._pending_reads = still_pending
 
-    def _has_lease(self) -> bool:
-        """Is a majority of the cluster still within the window paper §5.2 guarantees
-        they cannot yet have voted for a challenger in?
+    def _confirmed_leader_since(self, instant: float) -> bool:
+        """Has a majority acknowledged an AppendEntries this node sent at or after ``instant``?
+
+        An acknowledgement to a request sent after the read arrived proves that peer
+        still recognised us as leader *after* that moment. A majority of those means no
+        challenger can already have been elected and committed something we have not
+        seen, so this node's own applied state is authoritative for the read.
         """
         if self.state.role is not Role.LEADER:
             return False
-        now = self._clock.now()
-        lease = self._election_timeout_range[0]
-        live = 1 + sum(
-            1
-            for peer in self.peers
-            if now - self._last_heartbeat_ack.get(peer, float("-inf")) <= lease
+        confirmed = 1 + sum(
+            1 for peer in self.peers if self._last_heartbeat_ack.get(peer, float("-inf")) >= instant
         )
-        return live >= majority(self.cluster_size)
+        return confirmed >= majority(self.cluster_size)
 
     def _apply_committed(self) -> list[Result]:
         """Hand every newly committed entry to the state machine, in order."""
@@ -785,7 +834,6 @@ class RaftNode:
         become_leader(self.state, self.peers)
         self.leader_id = self.node_id
         self._tally = None
-        self._inflight.clear()
         self._awaiting_reply.clear()
         self._last_heartbeat_ack.clear()
         self._trace(EventKind.LEADER_ELECTED, votes=votes, cluster_size=self.cluster_size)
@@ -805,36 +853,44 @@ class RaftNode:
         self._broadcast_heartbeat()
         self._next_heartbeat_at = self._now() + self._heartbeat_interval
 
-    def _broadcast_heartbeat(self) -> None:
+    def _broadcast_heartbeat(self, *, force: bool = False) -> None:
         """Push each follower whatever it is missing (paper §5.3).
 
         A caught-up follower produces an empty ``entries`` list, which is precisely a
         heartbeat - so replication and proof-of-life are the same code path.
+
+        ``force`` is for a pending read, which needs acknowledgements to a round sent
+        after it arrived and so cannot reuse one already in flight.
         """
         for peer in self.peers:
-            self._replicate_to(peer)
+            self._replicate_to(peer, force=force)
 
-    def _replicate_to(self, peer: NodeId) -> None:
+    def _replicate_to(self, peer: NodeId, *, force: bool = False) -> None:
         """Send ``peer`` whatever it is missing - unless one is already in flight.
 
-        At most one outstanding request per peer, always: with two in flight, a reply
-        carrying no index (Figure 2, D4) cannot say which of them it is answering, and
-        crediting it to whichever was sent *last* - the only thing ``_inflight`` can
-        remember - can advance ``matchIndex`` past what the peer has actually durably
-        appended if that later request (or its reply) is the one that gets lost. A
-        timeout, not a reply, is what releases a peer stuck here: a genuinely lost
-        request or reply must not stall this peer's replication forever, and it is
-        fine to skip ahead to whatever the log looks like by the time we retry - the
-        next reply is what will correctly advance matchIndex to wherever it now
-        applies.
+        One outstanding request per peer keeps redundant traffic down; a timeout, not
+        only a reply, releases the slot, since a genuinely lost request or reply must
+        not stall this peer's replication forever.
+
+        Skipping ahead to whatever the log looks like by the time we retry is safe
+        because ``AppendEntriesReply.match_index`` states what each reply confirms.
+        It was *not* safe while the reply carried only ``term``/``success``: the
+        leader then had to guess that a reply answered its most recent request, so a
+        merely-slow reply arriving after this timeout credited the peer with the newer
+        request's entries and advanced ``matchIndex`` past what it had actually stored
+        (docs/architecture.md P8's fifth bug; tests/test_stale_reply.py).
         """
         pending_since = self._awaiting_reply.get(peer)
-        if pending_since is not None and self._now() - pending_since < self._reply_timeout:
+        if (
+            not force
+            and pending_since is not None
+            and self._now() - pending_since < self._reply_timeout
+        ):
             return
 
-        request = build_append_entries(self.state, peer)
-        self._inflight[peer] = request.prev_log_index + len(request.entries)
-        self._awaiting_reply[peer] = self._now()
+        now = self._now()
+        request = build_append_entries(self.state, peer).model_copy(update={"sent_at": now})
+        self._awaiting_reply[peer] = now
         self._trace(
             EventKind.APPEND_ENTRIES_SENT,
             peer=peer,

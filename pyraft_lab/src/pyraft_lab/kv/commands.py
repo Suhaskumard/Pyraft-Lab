@@ -55,6 +55,18 @@ class Command(BaseModel):
         return {"kind": self.KIND, **self.model_dump(mode="json")}
 
 
+SESSION_CLIENT = "_client"
+SESSION_SERIAL = "_serial"
+"""Keys ``RaftNode`` stamps onto a logged command to identify the request behind it.
+
+Underscored, and stripped below rather than declared on any :class:`Command`: this is
+the consensus layer's bookkeeping about *who asked*, not part of what the state machine
+is being asked to do. Keeping it out of the command models means ``Put``/``Delete``/
+``Cas`` still describe only their own operation, and the wire form of a command built by
+hand is unchanged. See :meth:`KVStore.apply_committed` for what they are for.
+"""
+
+
 def command_from_wire(wire: Any) -> Command:
     """Rebuild the concrete command from what came out of a log entry."""
     if not isinstance(wire, dict):
@@ -63,7 +75,9 @@ def command_from_wire(wire: Any) -> Command:
         cls = _REGISTRY[wire["kind"]]
     except KeyError:
         raise UnknownCommandKind(str(wire.get("kind"))) from None
-    return cls.model_validate({k: v for k, v in wire.items() if k != "kind"})
+    return cls.model_validate(
+        {k: v for k, v in wire.items() if k != "kind" and not k.startswith("_")}
+    )
 
 
 def registered_command_kinds() -> frozenset[str]:

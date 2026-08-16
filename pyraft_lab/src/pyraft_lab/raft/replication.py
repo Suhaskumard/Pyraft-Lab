@@ -83,15 +83,16 @@ def build_append_entries(
     )
 
 
-def handle_append_reply(
-    state: RaftState, peer: NodeId, reply: AppendEntriesReply, last_index_sent: int
-) -> None:
+def handle_append_reply(state: RaftState, peer: NodeId, reply: AppendEntriesReply) -> None:
     """Fold a follower's reply into the leader's per-follower tracking.
 
-    ``last_index_sent`` is the highest index the leader put in the request this reply
-    answers. Figure 2's reply carries only ``term`` and ``success``, so the leader must
-    remember what it sent rather than learn it back - ``node.py`` keeps that in-flight
-    number per peer.
+    The index credited comes from ``reply.match_index`` - the follower's own statement
+    of what it stored - rather than from what the leader remembers sending. The leader
+    cannot safely remember: it releases a peer's in-flight slot on a timeout as well as
+    on a reply, so a reply that was merely slow arrives after a second, larger request
+    has gone out, and crediting "the last thing I sent" hands the follower entries it
+    has never seen. That is docs/architecture.md P8's fifth bug, and taking the index
+    from the reply is what closes it.
 
     On success the follower's log is known to match up to that index. On failure the
     logs disagree at ``prevLogIndex``, so ``nextIndex`` walks back one and the next
@@ -101,9 +102,9 @@ def handle_append_reply(
         return  # not ours to act on; a higher term is handled by observe_term upstream
 
     if reply.success:
-        # max(): a delayed reply to an older, shorter request must never drag
-        # matchIndex backward once a later one has already advanced it.
-        state.match_index[peer] = max(state.match_index.get(peer, 0), last_index_sent)
+        # max(): replies can still arrive out of order, and an older one must never
+        # drag matchIndex backward once a later one has already advanced it.
+        state.match_index[peer] = max(state.match_index.get(peer, 0), reply.match_index)
         state.next_index[peer] = state.match_index[peer] + 1
     else:
         state.next_index[peer] = max(1, state.next_index.get(peer, 1) - 1)

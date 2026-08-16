@@ -96,7 +96,7 @@ def test_success_advances_match_and_next_index() -> None:
     for i in range(1, 4):
         state.log.append(LogEntry(term=1, index=i, command=i))
 
-    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=True), last_index_sent=3)
+    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=True, match_index=3))
 
     assert state.match_index["n2"] == 3
     assert state.next_index["n2"] == 4
@@ -106,7 +106,7 @@ def test_failure_walks_next_index_backward() -> None:
     state = leader()
     state.next_index["n2"] = 5
 
-    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=False), last_index_sent=0)
+    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=False))
 
     assert state.next_index["n2"] == 4
     assert state.match_index["n2"] == 0  # nothing is known to match yet
@@ -118,9 +118,7 @@ def test_next_index_never_walks_below_one() -> None:
     state.next_index["n2"] = 1
 
     for _ in range(5):
-        handle_append_reply(
-            state, "n2", AppendEntriesReply(term=1, success=False), last_index_sent=0
-        )
+        handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=False))
 
     assert state.next_index["n2"] == 1
 
@@ -131,8 +129,8 @@ def test_a_stale_success_cannot_drag_match_index_backward() -> None:
     for i in range(1, 6):
         state.log.append(LogEntry(term=1, index=i, command=i))
 
-    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=True), last_index_sent=5)
-    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=True), last_index_sent=2)
+    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=True, match_index=5))
+    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=True, match_index=2))
 
     assert state.match_index["n2"] == 5
 
@@ -141,7 +139,7 @@ def test_a_reply_from_another_term_is_ignored() -> None:
     state = leader(term=5)
     state.next_index["n2"] = 3
 
-    handle_append_reply(state, "n2", AppendEntriesReply(term=4, success=False), last_index_sent=0)
+    handle_append_reply(state, "n2", AppendEntriesReply(term=4, success=False))
 
     assert state.next_index["n2"] == 3
 
@@ -150,7 +148,7 @@ def test_a_reply_to_a_node_that_is_no_longer_leader_is_ignored() -> None:
     state = leader()
     state.role = Role.FOLLOWER
 
-    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=True), last_index_sent=3)
+    handle_append_reply(state, "n2", AppendEntriesReply(term=1, success=True, match_index=3))
 
     assert state.match_index["n2"] == 0
 

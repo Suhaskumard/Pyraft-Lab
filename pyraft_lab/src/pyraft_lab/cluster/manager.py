@@ -183,8 +183,11 @@ class ClusterManager:
             self.network, "repl-client", timeout=self.config.client_timeout, clock=self.clock
         )
         self.client = KVClient(
-            "repl-client", self.config.node_ids, self._channel,
-            policy=RetryPolicy(), clock=self.clock,
+            "repl-client",
+            self.config.node_ids,
+            self._channel,
+            policy=RetryPolicy(),
+            clock=self.clock,
         )
         return leader
 
@@ -227,8 +230,12 @@ class ClusterManager:
             else:
                 rows.append(
                     NodeSummary(
-                        node_id, True, node.role.value, node.current_term,
-                        node.leader_id, list(node.peers),
+                        node_id,
+                        True,
+                        node.role.value,
+                        node.current_term,
+                        node.leader_id,
+                        list(node.peers),
                     )
                 )
         return rows

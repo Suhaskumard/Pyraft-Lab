@@ -149,9 +149,18 @@ def test_the_banner_names_the_invariant_verbatim() -> None:
         config=ChaosConfig(nodes=3, trial_duration=5.0, trials=1, base_seed=1),
         trials=[
             ChaosTrialResult(
-                trial_index=0, run_id="r0", seed=1, passed=True, data_loss=False,
-                divergent=False, lost_write_count=0, linearizable_verdict="PASS",
-                recovery_time_ms=None, fault_count=0, duration_sec=5.0, persisted_at=None,
+                trial_index=0,
+                run_id="r0",
+                seed=1,
+                passed=True,
+                data_loss=False,
+                divergent=False,
+                lost_write_count=0,
+                linearizable_verdict="PASS",
+                recovery_time_ms=None,
+                fault_count=0,
+                duration_sec=5.0,
+                persisted_at=None,
             )
         ],
     )
@@ -192,9 +201,17 @@ def test_a_failing_trial_gets_a_replay_line_in_the_banner() -> None:
         config=config,
         trials=[
             ChaosTrialResult(
-                trial_index=0, run_id="deadbeef", seed=1, passed=False, data_loss=True,
-                divergent=False, lost_write_count=1, linearizable_verdict="PASS",
-                recovery_time_ms=None, fault_count=1, duration_sec=5.0,
+                trial_index=0,
+                run_id="deadbeef",
+                seed=1,
+                passed=False,
+                data_loss=True,
+                divergent=False,
+                lost_write_count=1,
+                linearizable_verdict="PASS",
+                recovery_time_ms=None,
+                fault_count=1,
+                duration_sec=5.0,
                 persisted_at="results/deadbeef",
             )
         ],

@@ -275,6 +275,16 @@ async def test_a_rejoining_empty_node_records_why_it_rejected(
             heartbeat_interval=FAST_HEARTBEAT,
         )
         nodes = [n if n is not follower else replacement for n in nodes]
+
+        # There is only something to reject if the leader still expects this peer to
+        # hold a log. While it was down the leader kept retrying and walking nextIndex
+        # back, and how far it got before the replacement appears is pure timing - on
+        # some interpreters it reaches 1, where prevLogIndex is 0, which *any* log
+        # matches, so the first append is accepted and there is no rejection to find.
+        # Pin the precondition the test is actually about rather than let scheduling
+        # decide whether the case under test happens at all.
+        leader.state.next_index[replacement.node_id] = leader.state.log.last_index + 1
+
         replacement.start()
 
         assert await wait_until(lambda: replacement.state.commit_index == leader.state.commit_index)
