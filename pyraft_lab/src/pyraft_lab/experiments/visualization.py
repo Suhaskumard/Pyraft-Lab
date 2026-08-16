@@ -184,8 +184,71 @@ def plot_replication(result: RunResult, path: Path) -> Path:
     return path
 
 
+def plot_consistency_availability(result: RunResult, path: Path) -> Path:
+    """The "why consensus works" picture (Phase 10, 2.0 item 12): each node's committed
+    prefix over time, and every client operation's outcome, on one page.
+
+    Not a new measurement - everything here is already in ``plot_replication``'s commit
+    series and ``plot_latency``'s operation scatter, just combined for a presentation
+    rather than split across two diagnostic plots. A node cut off by a partition shows
+    up as a flat line while the rest keep climbing; healing is the moment it turns
+    upward again and catches the others. See docs/architecture.md P10 for why this is
+    the generic, reusable form item 12's demo takes rather than a scenario-specific one.
+    """
+    plt = _pyplot()
+    figure, (top, bottom) = plt.subplots(
+        2, 1, figsize=(10, 5.5), sharex=True, gridspec_kw={"height_ratios": [2, 1]}
+    )
+
+    series: dict[str, list[tuple[float, int]]] = {n.node_id: [(0.0, 0)] for n in result.nodes}
+    commit = dict.fromkeys(series, 0)
+    for event in result.events:
+        if event.kind is not EventKind.LOG_COMMITTED or event.node not in commit:
+            continue
+        commit[event.node or ""] = int(event.details.get("to", 0))
+        series[event.node or ""].append((event.timestamp, commit[event.node or ""]))
+
+    # A node cut off by a partition has no further LOG_COMMITTED events at all - its
+    # series would otherwise just stop at its last one, which draws as the line
+    # vanishing rather than as the flat stall it actually is. Carrying the last value
+    # forward to the run's end is what makes a stalled minority visible as a plateau
+    # instead of an absence.
+    for node_id, points in series.items():
+        if points[-1][0] < result.duration:
+            points.append((result.duration, commit[node_id]))
+
+    for index, (node_id, points) in enumerate(sorted(series.items())):
+        xs, ys = zip(*points, strict=True)
+        top.step(
+            xs, ys, where="post", label=node_id, linewidth=1.3,
+            color=LEADER_COLORS[index % len(LEADER_COLORS)],
+        )
+    top.set_ylabel("commit index")
+    top.set_title(f"{result.scenario.name} - consistency vs availability")
+    top.legend(loc="upper left", frameon=False, fontsize=8, ncol=len(series))
+
+    for op in result.history.completed:
+        marker, color = ("o", "#55A868") if op.ok else ("x", "#C44E52")
+        bottom.scatter(op.completed_at, 1, marker=marker, s=18, color=color, alpha=0.7)
+    for op in result.history.incomplete:
+        bottom.axvline(op.invoked_at, color="#C44E52", alpha=0.25, linewidth=0.8, zorder=0)
+    bottom.set_yticks([])
+    bottom.set_ylabel("writes/reads\n(o=accepted, x=rejected)")
+    bottom.set_xlabel("time (s)")
+
+    for axis in (top, bottom):
+        _fault_markers(result, axis)
+        axis.grid(alpha=0.2)
+        axis.set_xlim(0, max(result.duration, 0.001))
+
+    figure.tight_layout()
+    figure.savefig(path, dpi=120)
+    plt.close(figure)
+    return path
+
+
 def plot_run(result: RunResult, directory: str | Path, *, prefix: str | None = None) -> list[Path]:
-    """Write all three plots for a run. Returns the paths written, in order."""
+    """Write every plot for a run. Returns the paths written, in order."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     stem = prefix or f"{_slug(result.scenario.name)}-{result.run_id}"
@@ -194,6 +257,87 @@ def plot_run(result: RunResult, directory: str | Path, *, prefix: str | None = N
         plot_latency(result, directory / f"{stem}-latency.png"),
         plot_leadership(result, directory / f"{stem}-leadership.png"),
         plot_replication(result, directory / f"{stem}-replication.png"),
+        plot_consistency_availability(result, directory / f"{stem}-consistency.png"),
+    ]
+
+
+#: Distinguishes each node count's line the same way ``LEADER_COLORS`` distinguishes a
+#: term's - reused here rather than duplicated, since a benchmark comparison plot has
+#: exactly the same "a handful of distinct series, greyscale-safe" requirement.
+_BENCHMARK_METRICS: dict[str, tuple[tuple[str, str], ...]] = {
+    "throughput": (("throughput_per_sec", "throughput (ops/s)"),),
+    "latency": (
+        ("latency_p50_ms", "p50 (ms)"),
+        ("latency_p95_ms", "p95 (ms)"),
+        ("latency_p99_ms", "p99 (ms)"),
+    ),
+    "election-recovery": (
+        ("election_time_ms", "election time (ms)"),
+        ("recovery_time_ms", "recovery time (ms)"),
+    ),
+    "resources": (
+        ("cpu_seconds", "CPU (s)"),
+        ("peak_memory_mb", "peak memory (MB)"),
+    ),
+}
+
+
+def _plot_benchmark_series(
+    by_nodes: dict[int, list[Any]], path: Path, fields: tuple[tuple[str, str], ...], *, title: str
+) -> Path:
+    plt = _pyplot()
+    figure, axes = plt.subplots(len(fields), 1, figsize=(8, 2.8 * len(fields)), sharex=True)
+    axes = [axes] if len(fields) == 1 else list(axes)
+
+    for axis, (attr, ylabel) in zip(axes, fields, strict=True):
+        for index, (nodes, cells) in enumerate(sorted(by_nodes.items())):
+            points = [
+                (cell.loss_rate * 100, value)
+                for cell in cells
+                if (value := getattr(cell, attr)) is not None
+            ]
+            if not points:
+                continue
+            xs, ys = zip(*points, strict=True)
+            axis.plot(
+                xs, ys, marker="o", label=f"{nodes} nodes",
+                color=LEADER_COLORS[index % len(LEADER_COLORS)],
+            )
+        axis.set_ylabel(ylabel)
+        axis.grid(alpha=0.2)
+
+    axes[0].set_title(title)
+    axes[0].legend(loc="best", frameon=False, fontsize=8)
+    axes[-1].set_xlabel("packet loss (%)")
+
+    figure.tight_layout()
+    figure.savefig(path, dpi=120)
+    plt.close(figure)
+    return path
+
+
+def plot_benchmark(report: Any, directory: str | Path) -> list[Path]:
+    """The comparison graphs 2.0 item 11 asks for: throughput, latency percentiles,
+    election/recovery time and CPU/memory, each plotted against packet loss with one
+    line per cluster size. Takes a ``BenchmarkReport`` (``experiments/benchmark.py``)
+    by structural typing rather than importing it, so ``benchmark.py`` never has to
+    import this module back.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    by_nodes: dict[int, list[Any]] = {}
+    for cell in report.cells:
+        by_nodes.setdefault(cell.nodes, []).append(cell)
+    for cells in by_nodes.values():
+        cells.sort(key=lambda c: c.loss_rate)
+
+    return [
+        _plot_benchmark_series(
+            by_nodes, directory / f"benchmark-{name}.png", fields,
+            title=f"{name.replace('-', ' & ')} vs packet loss",
+        )
+        for name, fields in _BENCHMARK_METRICS.items()
     ]
 
 

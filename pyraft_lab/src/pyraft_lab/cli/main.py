@@ -290,6 +290,69 @@ def chaos(
 
 
 @app.command()
+def benchmark(
+    nodes: Annotated[
+        str, typer.Option("--nodes", help="Comma-separated cluster sizes to compare.")
+    ] = "3,5,7",
+    loss: Annotated[
+        str, typer.Option("--loss", help="Comma-separated packet-loss percentages to compare.")
+    ] = "0,5,10,20",
+    duration: Annotated[
+        str, typer.Option("--duration", help="Per-cell trial duration, e.g. '15s'.")
+    ] = "15s",
+    seed: Annotated[int, typer.Option("--seed", help="Base seed every cell derives from.")] = 0,
+    results_dir: Annotated[
+        Path, typer.Option("--results-dir", help="Where a data-loss cell is persisted.")
+    ] = Path("results"),
+    output_dir: Annotated[
+        Path, typer.Option("--output-dir", help="Where the comparison graphs are written.")
+    ] = Path("results/benchmark"),
+    report: Annotated[
+        Path, typer.Option("--report", help="Where to write the JSON report.")
+    ] = Path("benchmark-report.json"),
+) -> None:
+    """Compare throughput, latency percentiles, election/recovery time and CPU/memory
+    across cluster sizes and packet-loss rates (2.0 item 11), plotting the results.
+
+    Each cell is one ordinary scenario run over Phase 5's runner, read back through the
+    same ``metrics.report()`` every other command uses - see docs/architecture.md P10
+    for how CPU/memory are sampled and why every cell includes a leader crash.
+    """
+    from pyraft_lab.experiments.benchmark import BenchmarkConfig, run_benchmark, write_report
+    from pyraft_lab.experiments.scenario import ScenarioError, parse_duration
+    from pyraft_lab.experiments.visualization import plot_benchmark
+
+    try:
+        node_counts = tuple(sorted({int(n) for n in nodes.split(",") if n.strip()}))
+        loss_rates = tuple(sorted({float(x) / 100.0 for x in loss.split(",") if x.strip()}))
+    except ValueError as exc:
+        typer.echo(f"cannot parse --nodes/--loss: {exc}")
+        raise typer.Exit(2) from exc
+    try:
+        trial_duration = parse_duration(duration, what="--duration")
+    except ScenarioError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(2) from exc
+
+    if not node_counts or not loss_rates:
+        typer.echo("--nodes and --loss must each name at least one value")
+        raise typer.Exit(2)
+
+    config = BenchmarkConfig(
+        node_counts=node_counts, loss_rates=loss_rates, trial_duration=trial_duration,
+        base_seed=seed, results_dir=results_dir,
+    )
+    campaign = asyncio.run(run_benchmark(config))
+    typer.echo(campaign.summary())
+
+    path = write_report(campaign, report)
+    typer.echo(f"\nwrote {path}")
+
+    for graph in plot_benchmark(campaign, output_dir):
+        typer.echo(f"wrote {graph}")
+
+
+@app.command()
 def init(
     config: Annotated[
         Path, typer.Option("--config", help="Where to write the default cluster config.")
@@ -396,10 +459,16 @@ def run(
     results_dir: Annotated[
         Path, typer.Option("--results-dir", help="Where to persist the run.")
     ] = Path("results"),
+    plot: Annotated[
+        Path | None,
+        typer.Option("--plot", help="Write this run's plots into this directory."),
+    ] = None,
 ) -> None:
     """Run one scenario file, persist it, and print a summary - the single-scenario
     sibling of ``stress``/``chaos``, over the same Phase 5 runner and Phase 7
-    persistence machinery.
+    persistence machinery. ``--plot`` writes the latency/leadership/replication/
+    consistency-availability plots ``experiments/visualization.py`` has always been
+    able to produce (Phase 10 is what finally wires it into the CLI).
     """
     from pyraft_lab.experiments.metrics import report, summarize
     from pyraft_lab.experiments.replay import persist_run
@@ -417,6 +486,13 @@ def run(
     document = report(result)
     typer.echo(summarize(document))
     typer.echo(f"\nwrote {path}")
+
+    if plot is not None:
+        from pyraft_lab.experiments.visualization import plot_run
+
+        for graph in plot_run(result, plot):
+            typer.echo(f"wrote {graph}")
+
     if not document["passed"]:
         raise typer.Exit(1)
 

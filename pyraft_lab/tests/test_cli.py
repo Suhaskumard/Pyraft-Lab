@@ -231,6 +231,26 @@ def test_cluster_start_reads_a_config_file(tmp_path: Path) -> None:
         assert f"n{i}" in result.stdout
 
 
+def test_run_plot_writes_the_four_plots(tmp_path: Path) -> None:
+    scenario = tmp_path / "smoke.yaml"
+    scenario.write_text(A_SHORT_SCENARIO, encoding="utf-8")
+    plot_dir = tmp_path / "plots"
+
+    result = runner.invoke(
+        app,
+        [
+            "run", "--scenario", str(scenario),
+            "--results-dir", str(tmp_path / "results"),
+            "--plot", str(plot_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    pngs = list(plot_dir.glob("*.png"))
+    assert len(pngs) == 4
+    assert all(p.stat().st_size > 0 for p in pngs)
+
+
 def test_cli_run_output_and_python_report_agree_on_pass_fail(tmp_path: Path) -> None:
     """Not a duplicate of test_run_executes_and_persists_a_scenario: this pins the
     CLI's exit code to the *same* document metrics.report() would compute, by reading
@@ -247,3 +267,42 @@ def test_cli_run_output_and_python_report_agree_on_pass_fail(tmp_path: Path) -> 
     run_dir = next(results_dir.iterdir())
     document = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
     assert document["passed"] is True
+
+
+# --- benchmark -----------------------------------------------------------------------
+
+
+def test_benchmark_writes_a_report_and_graphs_for_every_cell(tmp_path: Path) -> None:
+    output_dir = tmp_path / "graphs"
+
+    result = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "--nodes", "3,5",
+            "--loss", "0,10",
+            "--duration", "2s",
+            "--results-dir", str(tmp_path / "results"),
+            "--output-dir", str(output_dir),
+            "--report", str(tmp_path / "benchmark-report.json"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    document = json.loads((tmp_path / "benchmark-report.json").read_text(encoding="utf-8"))
+    assert document["cells"] == 4
+
+    pngs = list(output_dir.glob("*.png"))
+    assert len(pngs) == 4
+    assert all(p.stat().st_size > 0 for p in pngs)
+
+
+def test_benchmark_rejects_an_empty_nodes_or_loss_list(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "benchmark", "--nodes", "", "--loss", "0",
+            "--report", str(tmp_path / "r.json"), "--output-dir", str(tmp_path / "g"),
+        ],
+    )
+    assert result.exit_code == 2

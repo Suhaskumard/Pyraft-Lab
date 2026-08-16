@@ -263,7 +263,7 @@ for free).
 rest of 2.0 item 14's surface (`init`, `node inspect`, `node logs`, `trace`) layered
 onto the original's `put/get/status/show-log/run/results`.
 
-### Phase 10 — Benchmarking & Consistency/Availability Demo (2.0 items 11–12)
+### Phase 10 — Benchmarking & Consistency/Availability Demo (2.0 items 11–12) — done
 
 `pyraft-lab benchmark`: throughput/latency percentiles/election/recovery/CPU/memory
 across {3,5,7} nodes × {0,5,10,20}% loss, with comparison graphs generated
@@ -271,6 +271,35 @@ automatically (extends Phase 5's existing result schema rather than being a new
 subsystem, per 2.0's own note). The "Consistency vs Availability" partition demo (item
 12) is a named scenario built entirely from Phase 3 + Phase 5 primitives — no new code,
 just a scenario file and a presentation-oriented plot.
+
+As built:
+
+- `experiments/benchmark.py` (done): `BenchmarkConfig`/`BenchmarkCell`/`BenchmarkReport`
+  and `run_benchmark` sweep the grid as twelve ordinary `ExperimentRunner` runs, each
+  read back through the same `metrics.report()` every other command uses — no new
+  report schema, per 2.0's own note. Every cell carries a constant packet-loss rate for
+  its duration (skipped at 0%) plus one leader crash/recovery, so `election_time_ms`
+  and `recovery_time_ms` are never empty. CPU/memory are sampled with stdlib
+  `time.process_time()`/`tracemalloc` around the whole cell, not per simulated node —
+  see docs/architecture.md P10 for why per-node has no honest referent here and why
+  that avoids a new dependency (`psutil`).
+- `experiments/visualization.py` gains `plot_benchmark` (four comparison graphs —
+  throughput, latency P50/95/99, election/recovery time, CPU/memory — each vs packet
+  loss with one line per cluster size) and `plot_consistency_availability` (item 12's
+  picture: every node's commit index over time plus every operation's outcome). The
+  latter is generic, not scenario-specific, and is now the fourth plot `plot_run`
+  always writes.
+- CLI: `pyraft-lab benchmark [--nodes ...] [--loss ...] [--duration ...]` writes
+  `benchmark-report.json` and the four graphs. `pyraft-lab run` gains `--plot <dir>`,
+  which is also what finally wires `visualization.py` into the CLI at all — it shipped
+  in Phase 5's Day 12 scope but nothing before this phase ever called it.
+- `scenarios/consistency_availability.yaml` (new): a 5-node, 2-vs-3 partition, item
+  12's own diagram. Its partition window is 3 seconds, not the 12–15s the other
+  partition scenarios use — found while building this scenario's plot: a longer
+  isolation window can livelock the majority after healing, a real, general Raft
+  liveness gap (Figure 2's disruptive-server exposure) rather than anything specific to
+  this scenario. Flagged rather than fixed, in docs/architecture.md P10 — the fix is
+  protocol-level work (pre-vote), out of scope for a benchmarking phase.
 
 ### Phase 11 — Local Dashboard (2.0 item 3) — if time remains
 

@@ -27,7 +27,7 @@ merging the original 15-day plan with the PyRaft Lab 2.0 upgrades. Current state
 | 7 — Deterministic replay | **done** — run manifests, `pyraft-lab replay`, bit-identical trace diffing |
 | 8 — Stress & chaos | **done** — auto-generated stress campaigns, randomized chaos campaigns, both replay-able |
 | 9 — Cluster controller & CLI | **done** — live in-process cluster with an interactive session, `init`/`run`/`results` |
-| 10 — Benchmarking | not started |
+| 10 — Benchmarking | **done** — `pyraft-lab benchmark` across node counts × packet loss, comparison graphs, `--plot` for any run |
 | 11 — Dashboard (if time remains) | not started |
 | 12 — Docs & ship | not started |
 
@@ -62,7 +62,9 @@ pyraft-lab chaos --nodes N --duration Ns   # randomized fault sequences, a CHAOS
 pyraft-lab init                        # write a default cluster.yaml; ensure scenarios/, results/
 pyraft-lab cluster start --nodes N     # build a real cluster; enter an interactive session
 pyraft-lab run --scenario <path>       # run one scenario file, persist it, print a summary
+pyraft-lab run --scenario <path> --plot <dir>  # also write its latency/leadership/replication/consistency plots
 pyraft-lab results                     # list persisted runs, newest first
+pyraft-lab benchmark                   # compare {3,5,7} nodes x {0,5,10,20}% loss, graphs + benchmark-report.json
 ```
 
 ## Deterministic replay
@@ -176,6 +178,33 @@ pyraft-lab run --scenario scenarios/leader_crash.yaml
 pyraft-lab results
 ```
 
+Pass `--plot <dir>` to also write that run's plots — latency, leadership, replication,
+and a "consistency vs availability" picture (every node's commit index over time, and
+every operation's outcome) that's generic to any run, not only a partitioned one.
+
+```bash
+pyraft-lab run --scenario scenarios/consistency_availability.yaml --plot results/demo
+```
+
+That scenario is the "Consistency vs Availability" demo (2.0 item 12): a 5-node
+cluster split 2-vs-3. The minority side holds no majority and cannot commit while cut
+off; the majority side keeps serving; healing reconciles both without losing a write —
+exactly what the `-consistency.png` plot shows happening.
+
+## Benchmarking
+
+`pyraft-lab benchmark` compares throughput, latency (P50/P95/P99), election time,
+recovery time, CPU and memory across cluster sizes and packet-loss rates (2.0 item 11).
+Each `(nodes, loss%)` cell is one ordinary scenario run over the same `ExperimentRunner`
+every other command uses, read back through the same `metrics.report()` — see
+[docs/architecture.md](docs/architecture.md) P10 for how CPU/memory are sampled and why
+every cell includes a leader crash.
+
+```bash
+pyraft-lab benchmark --nodes 3,5,7 --loss 0,5,10,20 --duration 15s
+# benchmark-report.json, plus four comparison graphs in results/benchmark/
+```
+
 ## Tracing a run
 
 Recording is opt-in — a node built without a tracer records nothing. Hand one to the
@@ -202,7 +231,7 @@ src/pyraft_lab/
                   virtual clock, link characteristics and fault definitions
   cluster/        cluster manager, config and lifecycle
   client/         leader-discovering client and workload generators
-  experiments/    scenario runner, metrics, plots, stress and chaos campaigns
+  experiments/    scenario runner, metrics, plots, stress/chaos/benchmark campaigns
   observability/  event vocabulary, tracer, live metrics
   consistency/    history recording and linearizability checking
   cli/            the pyraft-lab command line

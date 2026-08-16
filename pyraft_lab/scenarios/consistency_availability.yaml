@@ -1,0 +1,40 @@
+# The "Consistency vs Availability" demo (2.0 item 12): a 5-node cluster split 2-vs-3.
+# No new engine code - this is Phase 3's partition primitive and Phase 5's runner,
+# pointed at a scenario built to make the trade-off visible: the two-node side holds no
+# majority and cannot commit anything while cut off, the three-node side keeps a
+# majority and keeps serving, and healing reconciles both without losing a write.
+# `pyraft-lab run --scenario scenarios/consistency_availability.yaml --plot <dir>`
+# renders it - see the "-consistency.png" plot for the commit-index/outcome picture.
+#
+# The partition window is deliberately short (3s, not the 15-20s the other partition
+# scenarios use). A longer isolation lets the cut-off pair's election timer cycle
+# enough times to run its term far ahead of the majority's; every vote request it then
+# sends after healing still gets rejected (its log is behind), but Figure 2's receiver
+# rule bumps a recipient's term - and so steps a leader down - on the strength of the
+# request's term alone, before the log check ever runs. A majority repeatedly deposed
+# this way never gets a stable heartbeat window to repair the pair's log, and the
+# cluster livelocks rather than reconciling - confirmed directly (see
+# docs/architecture.md P10) at 5s+ of isolation with this workload; 3s stays well clear
+# of it while still holding long enough to show a real, visible stall in the plot.
+name: consistency_availability
+duration: 25s
+nodes: 5
+seed: 7
+
+faults:
+  - at: 10s
+    action: partition
+    groups: [[1, 2], [3, 4, 5]]
+  - at: 13s
+    action: heal_partition
+
+workload:
+  type: put_get_mix
+  puts_per_sec: 10
+  get_ratio: 0.5
+  keys: 4
+  clients: 2
+
+expected:
+  data_loss: false
+  linearizable: true

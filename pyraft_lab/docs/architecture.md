@@ -812,6 +812,123 @@ assigns to Phase 9." This is that promise kept, not a new design — `run` is `s
 machinery, and `results` is the first thing to actually read back what `persist_run`
 and `write_report` have been writing to `results/` since Phase 7.
 
+### P10 — a benchmark cell is one run, read back through the existing report
+
+**Decision:** `experiments/benchmark.py` sweeps `{3,5,7} nodes x {0,5,10,20}% loss`
+(2.0 item 11's own numbers) as twelve independent `ExperimentRunner` runs, each read
+back through `metrics.report()` exactly as `pyraft-lab run` does - no statistical
+repeats per cell, no new report schema.
+
+**Why:** 2.0's own note for this item says it directly - "your existing result schema
+already includes latency, leadership and fault-impact metrics, so this is a natural
+extension rather than a completely new subsystem" - and the item only asks for a
+comparison across the grid, not confidence intervals within a cell. Percentiles come
+from the many client operations inside one run's duration, the same way every other
+report in this project computes them; repeating a cell would answer a question 2.0
+never asked, at twelve times the cost.
+
+### P10 — every cell gets a crash so `election_time_ms`/`recovery_time_ms` are never empty
+
+**Decision:** `benchmark_scenario` always adds a leader crash at 40% of a cell's
+duration and a recovery at 60%, on top of whatever packet loss the cell is comparing.
+A 0%-loss cell carries no `packet_loss` fault at all, rather than a `set_loss(0.0)`
+that would be a no-op with extra steps.
+
+**Why:** `metrics.report()`'s `election_time_ms` and `recovery_time_ms` are only ever
+populated if a run actually has an election to measure. The initial election every run
+already gets for free from `_settle()` supplies one election-time sample, but nothing
+gives `recovery_time_ms` a value unless a leader is actually lost and re-elected - and
+2.0 item 11 lists both as required columns. Timed at 40%/60% rather than earlier or
+later so the crash lands well inside the client workload's steady state on either side,
+not overlapping the initial settle or the run's teardown.
+
+### P10 — CPU and memory are the whole process, via stdlib, not per simulated node
+
+**Decision:** `_run_cell` brackets each `ExperimentRunner.run()` with
+`time.process_time()` (CPU seconds) and `tracemalloc.get_traced_memory()` (peak
+Python-level allocation), rather than adding `psutil` or attempting a per-node figure.
+
+**Why:** every node in a benchmark cell is a coroutine in this one process, sharing one
+`VirtualClock` (D8) - there is no OS-level unit smaller than the whole run's process to
+attribute CPU or memory to, so "CPU per node" has no honest referent in this
+architecture and would have to be estimated rather than measured. `time.process_time`
+and `tracemalloc` are both stdlib and cross-platform (the project runs and is tested on
+Windows), so the choice costs no new dependency - `psutil` is not otherwise needed
+anywhere else in the project, and adding it for two numbers this cheaply measurable
+would be a dependency in exchange for a false precision (per-node) the run cannot
+actually deliver.
+
+### P10 — the consistency/availability demo is a generic plot, not a scenario-specific one
+
+**Decision:** item 12's "why consensus works" picture is `plot_consistency_availability`
+in `experiments/visualization.py` - every node's commit index over time plus every
+client operation's outcome, on one page - applied to an ordinary partition scenario
+(`scenarios/consistency_availability.yaml`) through the already-existing `run --plot`
+path. Nothing about the plot function is specific to that one scenario file; it reads
+the same `RunResult` any scenario produces.
+
+**Why:** plan.md's own resolution for this phase is explicit - "built entirely from
+Phase 3 + Phase 5 primitives... no new code, just a scenario file and a
+presentation-oriented plot." Showing item 12's diagram literally (a client confined to
+only the minority side, its writes provably rejected rather than eventually succeeding
+on retry against the majority) would need a client whose known member list is a subset
+of the cluster - a real feature `client/client.py` and `experiments/runner.py` do not
+have, and adding it would be new engine code the phase's own scope explicitly rules
+out. The generic commit-index/outcome plot instead shows the actual, measurable
+consequence of the same partition - a majority that keeps replicating and a minority
+that provably cannot - which is the mechanism the diagram is illustrating, not a
+narrower substitute for it.
+
+`plot_run` folds this in as a fourth plot for every run, not only partition ones -
+simpler than detecting a partition and branching, and harmless: a fault-free run just
+shows every node's line moving together throughout, which is its own honest picture
+of an uneventful run.
+
+### P10 — found while tuning the demo: a partition long enough to run several election cycles can livelock the majority after it heals
+
+Not designed in - found, the same way P8's bugs were: by actually looking at what
+`plot_consistency_availability` drew rather than only checking `expected: data_loss:
+false`. The first cut of `consistency_availability.yaml` used a 15-second partition
+(the same order of magnitude as `minority_partition.yaml`'s). After healing, the
+isolated pair (`n1`, `n2`) never rejoined - `commit_index` frozen at the value it held
+when the partition opened, for the rest of a 90-second run tried directly against the
+runner, well past any plausible repair time.
+
+**What was confirmed:** every `RequestVote` a recipient handles bumps its own term (and
+steps a leader down, since a term change resets role to `FOLLOWER` - D2's
+`observe_term`) *before* the log-up-to-date check that would deny the vote ever runs -
+Figure 2's receiver rule, faithfully implemented. An isolated node with nobody to grant
+it a majority still keeps timing out and re-running for candidate every randomized
+election interval, and each attempt's term keeps climbing the whole time it is cut off.
+After healing, its vote requests still get denied (its log is genuinely behind), but
+every majority node that sees one still bumps its term and steps down first - deposing
+a leader that was making real replication progress toward the isolated pair before it
+can hold that leadership for even one stable heartbeat window. Directly observed via
+the event trace: 90 `ELECTION_STARTED` events and dozens of `LEADER_ELECTED` events in
+the 65 seconds after one such heal, term climbing continuously, `n1`/`n2`'s log length
+never moving. A sweep at increasing partition durations (this exact workload, this
+exact 2-vs-3 split) found the boundary directly: 2s and 3s of isolation both reconciled
+cleanly; 5s did not, within the same real time budget.
+
+**Why this is left open rather than fixed here:** it is a real, general liveness gap -
+the Raft paper names it directly in §6, "Disruptive servers", as a known consequence of
+Figure 2's basic algorithm, and names pre-vote (a `RequestVote` that does not itself
+advance term, tried first to check "could I actually win") as the standard mitigation.
+Implementing it correctly touches `raft/rpc.py`'s `handle_request_vote` and `raft/
+node.py`'s candidacy transition - core consensus code with 250+ existing tests staked
+on its current behavior - and is real protocol design work, not a benchmarking-phase
+fix. `scenarios/consistency_availability.yaml` instead uses a 3-second partition,
+confirmed clear of this boundary, which is long enough to show a real, visible stall in
+the plot and short enough to reconcile reliably. The same exposure likely already
+exists, undetected, in `minority_partition.yaml`'s 15-second window and
+`majority_partition.yaml`'s 12-second one - neither scenario's `expected:` block checks
+post-heal reconvergence, only `data_loss`/`linearizable`, which this gap does not
+violate (nothing committed is ever lost or misordered - the isolated pair just never
+rejoins). Recorded here, in the open, the same way P8's fifth bug was: reproducible on
+demand (`benchmark_scenario`/a hand-built `Scenario` with a partition duration >= 5s on
+this workload), real, and a natural next investigation rather than something to chase
+inside this phase.
+
 ## Deferred
 
 - **InstallSnapshot.** Listed in the specification's RPC table but assigned no day, and
