@@ -212,8 +212,11 @@ def _read_lines(path: Path) -> list[str]:
     tail into a corrupt file. The write side pins ``newline="\\n"`` for the same reason,
     which also makes a WAL byte-identical across platforms.
     """
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        return handle.read().splitlines(keepends=True)
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return handle.read().splitlines(keepends=True)
+    except UnicodeDecodeError as exc:
+        raise WalCorruption(f"{path}: not valid UTF-8 ({exc})") from exc
 
 
 def read_wal(path: str | Path, *, repair: bool = False) -> WalRecovery:

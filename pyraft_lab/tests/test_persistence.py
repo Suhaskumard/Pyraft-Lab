@@ -308,6 +308,17 @@ def test_corruption_with_valid_records_after_it_is_refused(wal_path: Path) -> No
         read_wal(wal_path)
 
 
+def test_non_utf8_bytes_are_corruption_not_a_crash(wal_path: Path) -> None:
+    """A WAL file that isn't even valid UTF-8 (torn write mid-byte-sequence, or garbage
+    landing on the path) must surface as ``WalCorruption`` like any other damage - not
+    an unhandled ``UnicodeDecodeError`` escaping ``read_wal``.
+    """
+    wal_path.write_bytes(bytes([0xF6, 0x00, 0x9B, 0xFF]))
+
+    with pytest.raises(WalCorruption, match="not valid UTF-8"):
+        read_wal(wal_path)
+
+
 def test_repair_discards_from_the_damaged_record_onward_and_says_so(wal_path: Path) -> None:
     wal = open_wal(wal_path)
     wal.record_term(3, "n1")
@@ -485,6 +496,17 @@ def test_cli_reports_a_corrupt_wal_without_pretending_to_recover_it(wal_path: Pa
     again = runner.invoke(app, ["inspect-wal", str(wal_path)])
     assert again.exit_code == 0
     assert "WAL corrupt:" not in again.stdout
+
+
+def test_cli_reports_non_utf8_wal_bytes_cleanly_instead_of_a_traceback(
+    wal_path: Path,
+) -> None:
+    wal_path.write_bytes(bytes([0xF6, 0x00, 0x9B, 0xFF]))
+
+    result = runner.invoke(app, ["inspect-wal", str(wal_path)])
+
+    assert result.exit_code == 1
+    assert "corrupt" in result.stdout.lower()
 
 
 def test_cli_lists_the_records_when_asked(wal_path: Path) -> None:

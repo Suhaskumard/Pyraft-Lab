@@ -4,7 +4,7 @@ import { api } from '../../api/client';
 import { useJobRunner } from '../../api/useJob';
 import { CampaignControls } from './CampaignControls';
 import { Empty, JobCard, Metric, Panel, ScreenHeader, Verdict, fmtMs } from '../ui';
-import type { CampaignReport, StressTrial } from '../../types/pyraft';
+import type { StressTrial, TrialCampaignReport } from '../../types/pyraft';
 
 /**
  * Coverage across many cheap trials.
@@ -19,7 +19,8 @@ export function StressCampaignScreen() {
   const [duration, setDuration] = useState('10s');
   const [trials, setTrials] = useState(10);
   const [seed, setSeed] = useState(0);
-  const { job, running, starting, start, cancel } = useJobRunner<CampaignReport<StressTrial>>('stress');
+  const { job, running, starting, start, cancel } =
+    useJobRunner<TrialCampaignReport<StressTrial>>('stress');
 
   const report = job?.status === 'succeeded' ? job.result : null;
 

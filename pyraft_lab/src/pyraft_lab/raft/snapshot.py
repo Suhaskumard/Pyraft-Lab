@@ -187,6 +187,21 @@ class Snapshot:
             )
         return cls(meta=meta, data=data)
 
+    @classmethod
+    def from_file(cls, path: Path) -> Snapshot:
+        """Read and verify the snapshot at ``path``.
+
+        Routes decode failures through the same :class:`SnapshotCorruption` as a bad
+        checksum, rather than letting a raw ``UnicodeDecodeError`` escape - a snapshot
+        full of garbage bytes is exactly the kind of damage this module exists to catch,
+        not a reason to crash the caller.
+        """
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise SnapshotCorruption(f"{path}: not valid UTF-8 ({exc})") from exc
+        return cls.from_json(text)
+
 
 class SnapshotStore:
     """A directory of snapshot files, newest last.
@@ -246,7 +261,7 @@ class SnapshotStore:
         path = self.directory / snapshot_filename(index)
         if not path.exists():
             raise SnapshotError(f"no snapshot at index {index} in {self.directory}")
-        return Snapshot.from_json(path.read_text(encoding="utf-8"))
+        return Snapshot.from_file(path)
 
     def load_latest(self) -> Snapshot | None:
         """The newest snapshot that verifies, or ``None`` if there is none.
@@ -257,7 +272,7 @@ class SnapshotStore:
         """
         for path in reversed(self._paths()):
             try:
-                return Snapshot.from_json(path.read_text(encoding="utf-8"))
+                return Snapshot.from_file(path)
             except (SnapshotError, OSError):
                 continue
         return None
@@ -267,7 +282,7 @@ class SnapshotStore:
         found: list[SnapshotMeta] = []
         for path in self._paths():
             try:
-                found.append(Snapshot.from_json(path.read_text(encoding="utf-8")).meta)
+                found.append(Snapshot.from_file(path).meta)
             except (SnapshotError, OSError):
                 continue
         return found

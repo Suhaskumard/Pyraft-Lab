@@ -4,7 +4,7 @@ import { api } from '../../api/client';
 import { useJobRunner } from '../../api/useJob';
 import { CampaignControls } from './CampaignControls';
 import { Empty, Failure, JobCard, Metric, Panel, ScreenHeader, Verdict, fmtMs } from '../ui';
-import type { CampaignReport, ChaosTrial } from '../../types/pyraft';
+import type { ChaosTrial, TrialCampaignReport } from '../../types/pyraft';
 
 /**
  * One invariant, checked every time: committed data is never silently lost.
@@ -19,7 +19,8 @@ export function ChaosCampaignScreen() {
   const [duration, setDuration] = useState('10s');
   const [trials, setTrials] = useState(10);
   const [seed, setSeed] = useState(0);
-  const { job, running, starting, start, cancel } = useJobRunner<CampaignReport<ChaosTrial>>('chaos');
+  const { job, running, starting, start, cancel } =
+    useJobRunner<TrialCampaignReport<ChaosTrial>>('chaos');
 
   const report = job?.status === 'succeeded' ? job.result : null;
   const lost = report?.trial_results.filter((trial) => trial.data_loss) ?? [];

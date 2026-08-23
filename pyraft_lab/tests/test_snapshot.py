@@ -127,6 +127,25 @@ def test_the_newest_snapshot_being_corrupt_does_not_hide_an_older_good_one(
     assert [m.last_included_index for m in store.metas()] == [5]
 
 
+def test_a_snapshot_full_of_non_utf8_bytes_is_skipped_not_a_crash(tmp_path: Path) -> None:
+    """Same guarantee as the previous test, but for damage bad enough that the file
+    can't even be decoded as text - ``load_latest``/``metas`` must still skip it and
+    fall back to an older good snapshot, not let ``UnicodeDecodeError`` escape as an
+    unhandled exception (it is a ``ValueError``, not an ``OSError``, so it slips past a
+    handler that only names the latter).
+    """
+    store = SnapshotStore(tmp_path, sync=False)
+    store.save(snapshot_of({"a": 1}, index=5))
+    newest = store.save(snapshot_of({"a": 1, "b": 2}, index=12))
+    newest.write_bytes(bytes([0xF6, 0x00, 0x9B, 0xFF]))
+
+    latest = store.load_latest()
+
+    assert latest is not None
+    assert latest.meta.last_included_index == 5
+    assert [m.last_included_index for m in store.metas()] == [5]
+
+
 def test_pruning_keeps_the_newest_and_deletes_the_rest(tmp_path: Path) -> None:
     store = SnapshotStore(tmp_path, keep=2, sync=False)
     for index in (1, 2, 3, 4):
@@ -376,6 +395,18 @@ def test_cli_refuses_a_corrupt_snapshot(tmp_path: Path) -> None:
     payload = json.loads(snapshot_of({"a": 1}, index=1).to_json())
     payload["data"]["a"] = 999
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = runner.invoke(app, ["inspect-snapshot", str(path)])
+
+    assert result.exit_code == 1
+    assert "unusable" in result.stdout
+
+
+def test_cli_reports_non_utf8_snapshot_bytes_cleanly_instead_of_a_traceback(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "snapshot-000000000001.json"
+    path.write_bytes(bytes([0xF6, 0x00, 0x9B, 0xFF]))
 
     result = runner.invoke(app, ["inspect-snapshot", str(path)])
 

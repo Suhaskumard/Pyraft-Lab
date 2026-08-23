@@ -345,3 +345,48 @@ def test_benchmark_rejects_an_empty_nodes_or_loss_list(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 2
+
+
+def test_benchmark_rejects_a_non_positive_node_count(tmp_path: Path) -> None:
+    """``--nodes 0`` (or negative) must be refused the same way ``cluster start``
+    refuses it, not silently produce a fabricated report with 0.00 ops/s.
+    """
+    result = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "--nodes",
+            "0",
+            "--loss",
+            "0",
+            "--duration",
+            "1s",
+            "--report",
+            str(tmp_path / "r.json"),
+            "--output-dir",
+            str(tmp_path / "g"),
+        ],
+    )
+    assert result.exit_code == 2
+    assert not (tmp_path / "r.json").exists()
+
+
+def test_benchmark_rejects_an_out_of_range_loss_percentage(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "--nodes",
+            "3",
+            "--loss",
+            "-5,150",
+            "--duration",
+            "1s",
+            "--report",
+            str(tmp_path / "r.json"),
+            "--output-dir",
+            str(tmp_path / "g"),
+        ],
+    )
+    assert result.exit_code == 2
+    assert not (tmp_path / "r.json").exists()

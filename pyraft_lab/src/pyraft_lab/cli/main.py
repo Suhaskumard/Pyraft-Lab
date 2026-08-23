@@ -154,7 +154,7 @@ def inspect_snapshot(
                 typer.echo(f"{meta.filename}  {meta}")
             return
 
-        snapshot = Snapshot.from_json(path.read_text(encoding="utf-8"))
+        snapshot = Snapshot.from_file(path)
     except SnapshotError as exc:
         typer.echo(f"snapshot unusable: {exc}")
         raise typer.Exit(1) from exc
@@ -349,6 +349,12 @@ def benchmark(
 
     if not node_counts or not loss_rates:
         typer.echo("--nodes and --loss must each name at least one value")
+        raise typer.Exit(2)
+    if node_counts[0] < 1:
+        typer.echo(f"a cluster needs at least one node, got {node_counts[0]}")
+        raise typer.Exit(2)
+    if loss_rates[0] < 0.0 or loss_rates[-1] > 1.0:
+        typer.echo("--loss percentages must each be within [0, 100]")
         raise typer.Exit(2)
 
     config = BenchmarkConfig(

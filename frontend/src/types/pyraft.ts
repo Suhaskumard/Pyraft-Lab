@@ -372,6 +372,15 @@ export interface Percentiles {
   max: number | null;
 }
 
+/** Stress/chaos's per-trial report: the backend calls the array `trial_results`. */
+export interface TrialCampaignReport<T> {
+  trials: number;
+  passed: number;
+  failed: number;
+  trial_results: T[];
+  [key: string]: unknown;
+}
+
 export interface BenchmarkCell {
   nodes: number;
   loss_rate: number;
