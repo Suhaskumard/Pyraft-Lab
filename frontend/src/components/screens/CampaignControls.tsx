@@ -46,7 +46,7 @@ export function CampaignControls({
           {running ? 'Running…' : label}
         </button>
       </div>
-      <p className="text-[11px] text-[#8b919d] mt-3">
+      <p className="text-[13px] text-[#8b919d] mt-3">
         Trials run on a virtual clock in a worker thread of their own, so a long campaign
         cannot starve a live cluster's wall-clock timers.
       </p>
@@ -76,7 +76,7 @@ function Knob({
         max={max}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="w-24 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1.5 font-mono text-xs text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
+        className="w-24 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1.5 font-mono text-sm text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
       />
     </label>
   );
@@ -100,7 +100,7 @@ function TextKnob({
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="w-24 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1.5 font-mono text-xs text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
+        className="w-24 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1.5 font-mono text-sm text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
       />
     </label>
   );

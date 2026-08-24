@@ -56,8 +56,8 @@ export function DeterministicReplayScreen() {
                       : 'border-[#30363d] bg-[#181c21] hover:border-[#414752]'
                   }`}
                 >
-                  <div className="font-mono text-xs text-[#e0e2ea] truncate">{row.runId}</div>
-                  <div className="font-mono text-[10px] text-[#8b919d] mt-0.5">
+                  <div className="font-mono text-sm text-[#e0e2ea] truncate">{row.runId}</div>
+                  <div className="font-mono text-[12px] text-[#8b919d] mt-0.5">
                     {row.scenarioName ?? '—'} · seed {row.seed ?? '—'}
                   </div>
                 </button>
@@ -99,10 +99,10 @@ export function DeterministicReplayScreen() {
                     <XCircle className="w-5 h-5 shrink-0" />
                   )}
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold">
+                    <p className="text-base font-semibold">
                       {outcome.matched ? 'Bit-identical' : 'The trace diverged'}
                     </p>
-                    <pre className="text-[11px] font-mono mt-1 whitespace-pre-wrap break-words">
+                    <pre className="text-[13px] font-mono mt-1 whitespace-pre-wrap break-words">
                       {outcome.explanation}
                     </pre>
                   </div>
@@ -112,7 +112,7 @@ export function DeterministicReplayScreen() {
               {job && <JobCard job={job} />}
 
               {!job && (
-                <p className="text-xs text-[#8b919d] leading-relaxed">
+                <p className="text-sm text-[#8b919d] leading-relaxed">
                   Replay reconstructs an experiment runner from the manifest — the scenario, the
                   seed, and the three constructor knobs a scenario file does not itself encode —
                   runs it, and compares the new trace against the recorded one field for field.

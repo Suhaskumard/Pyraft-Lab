@@ -130,9 +130,9 @@ export function GlobalCommandPalette({ isOpen, onClose, onSelectScreen }: Props)
               if (event.key === 'Escape') onClose();
             }}
             placeholder="Jump to a page, or type a cluster command (put k v, topology, trace)…"
-            className="flex-1 bg-transparent outline-none text-sm text-[#e0e2ea] placeholder:text-[#8b919d] font-mono"
+            className="flex-1 bg-transparent outline-none text-base text-[#e0e2ea] placeholder:text-[#8b919d] font-mono"
           />
-          <kbd className="text-[10px] font-mono text-[#8b919d] border border-[#30363d] rounded px-1.5 py-0.5">
+          <kbd className="text-[12px] font-mono text-[#8b919d] border border-[#30363d] rounded px-1.5 py-0.5">
             Esc
           </kbd>
         </div>
@@ -155,7 +155,7 @@ export function GlobalCommandPalette({ isOpen, onClose, onSelectScreen }: Props)
         ) : (
           <ul className="pt-2 max-h-80 overflow-y-auto">
             {matches.length === 0 && (
-              <li className="text-xs text-[#8b919d] py-4 text-center">
+              <li className="text-sm text-[#8b919d] py-4 text-center">
                 Nothing matches “{query}”.
               </li>
             )}
@@ -166,13 +166,13 @@ export function GlobalCommandPalette({ isOpen, onClose, onSelectScreen }: Props)
                     onSelectScreen(page.id);
                     onClose();
                   }}
-                  className={`w-full text-left px-2.5 py-2 rounded text-xs flex items-center justify-between gap-3 hover:bg-[#1c2025] ${
+                  className={`w-full text-left px-2.5 py-2 rounded text-sm flex items-center justify-between gap-3 hover:bg-[#1c2025] ${
                     index === 0 ? 'bg-[#1c2025] text-[#58a6ff]' : 'text-[#c0c7d4]'
                   }`}
                 >
                   <span>{page.label}</span>
                   {index === 0 && (
-                    <span className="text-[10px] font-mono text-[#8b919d] flex items-center gap-1">
+                    <span className="text-[12px] font-mono text-[#8b919d] flex items-center gap-1">
                       <CornerDownLeft className="w-3 h-3" /> open
                     </span>
                   )}

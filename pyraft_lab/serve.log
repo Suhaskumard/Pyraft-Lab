@@ -1,0 +1,14 @@
+﻿pyraft-lab API on http://127.0.0.1:8000  (workspace: C:\Users\Suhas kumar\OneDrive\Desktop\PyRaft Lab\pyraft_lab)
+python.exe : INFO:     Started server process [37096]
+At line:1 char:368
++ ... yraft_lab"; & ".venv\Scripts\python.exe" -m pyraft_lab.cli.main serve ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO:     Started server process [37096]:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000): [winerror 10048] only one usage 
+of each socket address (protocol/network address/port) is normally permitted
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.

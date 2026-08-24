@@ -59,8 +59,8 @@ export function LinearizabilityAnalysisScreen() {
                       : 'border-[#30363d] bg-[#181c21] hover:border-[#414752]'
                   }`}
                 >
-                  <div className="font-mono text-xs truncate">{row.runId}</div>
-                  <div className="font-mono text-[10px] text-[#8b919d] mt-0.5">
+                  <div className="font-mono text-sm truncate">{row.runId}</div>
+                  <div className="font-mono text-[12px] text-[#8b919d] mt-0.5">
                     {row.scenarioName ?? '—'}
                   </div>
                 </button>
@@ -157,7 +157,7 @@ export function LinearizabilityAnalysisScreen() {
                     <Field label="Elections" value={report.leadership.total_elections} />
                     <Field label="Leader changes" value={report.leadership.leader_changes} />
                   </div>
-                  <p className="text-[11px] text-[#8b919d] mt-3 leading-relaxed">
+                  <p className="text-[13px] text-[#8b919d] mt-3 leading-relaxed">
                     Lost writes and log divergence are decidable every time; linearizability is
                     not. That is why a campaign's pass/fail gates on the first two and records
                     the third informationally.

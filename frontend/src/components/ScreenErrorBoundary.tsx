@@ -59,13 +59,13 @@ export class ScreenErrorBoundary extends Component<Props, State> {
         <div className="obsidian-card py-8 px-6 flex flex-col gap-3">
           <div className="flex items-start gap-2.5 text-[#ffb4ab]">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <h2 className="text-base font-semibold">This screen could not be drawn</h2>
+            <h2 className="text-lg font-semibold">This screen could not be drawn</h2>
           </div>
-          <p className="text-xs text-[#8b919d] leading-relaxed">
+          <p className="text-sm text-[#8b919d] leading-relaxed">
             The rest of the lab is unaffected — the cluster is still running and every other
             screen still works. Pick another page in the sidebar, or try this one again.
           </p>
-          <pre className="terminal-block text-[11px] whitespace-pre-wrap break-words">
+          <pre className="terminal-block text-[13px] whitespace-pre-wrap break-words">
             {error.message}
           </pre>
           <button

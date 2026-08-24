@@ -133,7 +133,7 @@ function Picker({
       <select
         value={value ?? ''}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full bg-[#0b0e14] border border-[#30363d] rounded px-2.5 py-2 font-mono text-xs text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
+        className="w-full bg-[#0b0e14] border border-[#30363d] rounded px-2.5 py-2 font-mono text-sm text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
       >
         <option value="">— select a run —</option>
         {runs.map((run) => (

@@ -85,7 +85,7 @@ export function ResultsExplorerScreen() {
                       )}
                     </td>
                     <td>{row.passed === undefined ? <span className="text-[#8b919d]">—</span> : <Verdict ok={row.passed} />}</td>
-                    <td className="font-mono text-[11px] text-[#8b919d]">{row.createdAt ?? '—'}</td>
+                    <td className="font-mono text-[13px] text-[#8b919d]">{row.createdAt ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -96,7 +96,7 @@ export function ResultsExplorerScreen() {
 
       {selected && (
         <>
-          <h2 className="text-sm font-semibold text-[#e0e2ea] font-mono">{selected}</h2>
+          <h2 className="text-base font-semibold text-[#e0e2ea] font-mono">{selected}</h2>
           {detail.loading ? (
             <Skeleton rows={4} />
           ) : detail.error ? (

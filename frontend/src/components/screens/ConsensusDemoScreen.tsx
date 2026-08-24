@@ -69,9 +69,9 @@ export function ConsensusDemoScreen() {
                       : 'border-[#93000a]/50 bg-[#93000a]/10'
                 }`}
               >
-                <span className="font-mono text-xs font-medium">{node.id}</span>
+                <span className="font-mono text-sm font-medium">{node.id}</span>
                 <RolePill role={node.role} />
-                <span className="font-mono text-[11px] text-[#8b919d]">t{node.currentTerm ?? '—'}</span>
+                <span className="font-mono text-[13px] text-[#8b919d]">t{node.currentTerm ?? '—'}</span>
               </div>
             ))}
           </div>
@@ -93,8 +93,8 @@ export function ConsensusDemoScreen() {
                     key={pair}
                     className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded bg-[#181c21] border border-[#30363d]"
                   >
-                    <span className="font-mono text-[11px] text-[#c0c7d4]">{pair}</span>
-                    <span className="font-mono text-[11px] text-[#58a6ff] font-semibold">{count}</span>
+                    <span className="font-mono text-[13px] text-[#c0c7d4]">{pair}</span>
+                    <span className="font-mono text-[13px] text-[#58a6ff] font-semibold">{count}</span>
                   </div>
                 ))}
             </div>
@@ -143,7 +143,7 @@ export function ConsensusDemoScreen() {
                       </span>
                     </td>
                     <td className="font-mono text-right">{message.term ?? '—'}</td>
-                    <td className="font-mono text-[11px] text-[#8b919d] truncate max-w-md">
+                    <td className="font-mono text-[13px] text-[#8b919d] truncate max-w-md">
                       {Object.entries(message.details)
                         .filter(([k]) => k !== 'peer' && k !== 'candidate' && k !== 'leader')
                         .map(([k, v]) => `${k}=${v}`)

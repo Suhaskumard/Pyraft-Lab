@@ -83,12 +83,12 @@ export function ExperimentRunnerScreen({ onOpenResults }: { onOpenResults: () =>
                 >
                   <div className="flex items-center gap-2">
                     <FileCode className="w-3.5 h-3.5 text-[#8b919d] shrink-0" />
-                    <span className="font-mono text-xs text-[#e0e2ea] truncate">{scenario.file}</span>
+                    <span className="font-mono text-sm text-[#e0e2ea] truncate">{scenario.file}</span>
                   </div>
                   {scenario.error ? (
-                    <p className="text-[10px] text-[#ffb4ab] mt-1">{scenario.error}</p>
+                    <p className="text-[12px] text-[#ffb4ab] mt-1">{scenario.error}</p>
                   ) : (
-                    <p className="text-[10px] text-[#8b919d] mt-1 font-mono">
+                    <p className="text-[12px] text-[#8b919d] mt-1 font-mono">
                       {scenario.nodes} nodes · {scenario.durationSec}s · {scenario.faultCount} fault
                       {scenario.faultCount === 1 ? '' : 's'} · seed {scenario.seed}
                     </p>
@@ -109,9 +109,9 @@ export function ExperimentRunnerScreen({ onOpenResults }: { onOpenResults: () =>
                 value={seed}
                 onChange={(event) => setSeed(event.target.value)}
                 placeholder={`seed (${chosen?.seed ?? 0})`}
-                className="w-28 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1 font-mono text-xs text-[#e0e2ea] placeholder:text-[#8b919d] focus:border-[#58a6ff] outline-none"
+                className="w-28 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1 font-mono text-sm text-[#e0e2ea] placeholder:text-[#8b919d] focus:border-[#58a6ff] outline-none"
               />
-              <label className="flex items-center gap-1.5 text-[11px] text-[#c0c7d4] cursor-pointer">
+              <label className="flex items-center gap-1.5 text-[13px] text-[#c0c7d4] cursor-pointer">
                 <input
                   type="checkbox"
                   checked={plot}
@@ -216,7 +216,7 @@ export function ReportView({ report, plots = [] }: { report: RunReport; plots?: 
               <div className="flex items-center gap-2">
                 <Verdict ok={report.consistency.linearizable} yes="LINEARIZABLE" no="VIOLATION" />
               </div>
-              <p className="text-[11px] text-[#c0c7d4] leading-relaxed">
+              <p className="text-[13px] text-[#c0c7d4] leading-relaxed">
                 {report.consistency.explanation}
               </p>
             </div>
@@ -298,7 +298,7 @@ export function ReportView({ report, plots = [] }: { report: RunReport; plots?: 
         <Panel title="Plots" subtitle="written to the workspace">
           <ul className="flex flex-col gap-1">
             {plots.map((path) => (
-              <li key={path} className="font-mono text-[11px] text-[#8b919d]">
+              <li key={path} className="font-mono text-[13px] text-[#8b919d]">
                 {path}
               </li>
             ))}

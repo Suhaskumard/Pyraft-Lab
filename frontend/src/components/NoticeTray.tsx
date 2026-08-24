@@ -30,7 +30,7 @@ export function NoticeTray() {
             className={`flex items-start gap-2.5 px-3 py-2.5 rounded border animate-fade-in ${tone}`}
           >
             <Icon className="w-4 h-4 shrink-0 mt-0.5" />
-            <p className="text-xs leading-relaxed flex-1 break-words">{notice.message}</p>
+            <p className="text-sm leading-relaxed flex-1 break-words">{notice.message}</p>
             <button
               onClick={() => dismiss(notice.id)}
               className="shrink-0 opacity-60 hover:opacity-100"

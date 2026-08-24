@@ -44,7 +44,7 @@ export function WalInspectorScreen() {
           <button
             key={node.id}
             onClick={() => setNodeId(node.id)}
-            className={`px-3 py-1.5 rounded border font-mono text-xs transition-all ${
+            className={`px-3 py-1.5 rounded border font-mono text-sm transition-all ${
               node.id === selected
                 ? 'border-[#58a6ff] bg-[#1c2025] text-[#58a6ff]'
                 : 'border-[#30363d] bg-[#181c21] text-[#c0c7d4] hover:border-[#414752]'
@@ -72,7 +72,7 @@ export function WalInspectorScreen() {
       ) : report.corrupt ? (
         <Panel title="WAL refused">
           <Failure message={report.reason ?? 'unreadable'} />
-          <p className="text-[11px] text-[#8b919d] mt-3 leading-relaxed">
+          <p className="text-[13px] text-[#8b919d] mt-3 leading-relaxed">
             A damaged <em>final</em> record is a torn write and recovers cleanly. Damage with
             valid records after it is refused instead: recovery is a fold, and folding past a
             missing record would produce state this node never had — skip a truncation and
@@ -150,7 +150,7 @@ export function WalInspectorScreen() {
                           </td>
                           <td className="font-mono text-right">{record.index ?? '—'}</td>
                           <td className="font-mono text-right text-[#58a6ff]">{record.term ?? '—'}</td>
-                          <td className="font-mono text-[11px] truncate max-w-lg">{record.detail}</td>
+                          <td className="font-mono text-[13px] truncate max-w-lg">{record.detail}</td>
                           <td>
                             <span className="status-pill status-pill-healthy">
                               <span className="status-dot" />

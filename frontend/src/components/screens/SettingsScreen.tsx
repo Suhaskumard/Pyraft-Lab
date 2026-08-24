@@ -74,7 +74,7 @@ export function SettingsScreen() {
         <>
           {cluster?.running && (
             <div className="flex items-start gap-2.5 p-3 rounded border border-[#4f3400] bg-[#4f3400]/20 text-[#ffba42]">
-              <p className="text-xs leading-relaxed">
+              <p className="text-sm leading-relaxed">
                 A cluster is running. Saving here changes what the <em>next</em> cluster is built
                 from — a node's timers are fixed when it is constructed, so nothing below affects
                 the one currently up.
@@ -109,8 +109,8 @@ export function SettingsScreen() {
                     className="accent-[#58a6ff] mt-0.5"
                   />
                   <span>
-                    <span className="text-xs text-[#e0e2ea]">Persist each node to a WAL</span>
-                    <span className="block text-[11px] text-[#8b919d] mt-0.5">
+                    <span className="text-sm text-[#e0e2ea]">Persist each node to a WAL</span>
+                    <span className="block text-[13px] text-[#8b919d] mt-0.5">
                       Only a WAL-backed node is genuinely rebuilt from disk on restart — stopping a
                       node never clears its in-memory state on its own. Required for the WAL and
                       snapshot pages.
@@ -155,7 +155,7 @@ export function SettingsScreen() {
                 />
                 {invalid && <Failure message="The minimum election timeout must be below the maximum." />}
                 {!invalid && form.heartbeatIntervalMs >= form.electionTimeoutMinMs && (
-                  <div className="text-[11px] text-[#ffba42] leading-relaxed">
+                  <div className="text-[13px] text-[#ffba42] leading-relaxed">
                     <strong>This cluster will not hold a leader.</strong> A heartbeat of{' '}
                     {form.heartbeatIntervalMs} ms cannot reach a follower whose election timeout
                     starts at {form.electionTimeoutMinMs} ms, so followers will campaign against a
@@ -169,7 +169,7 @@ export function SettingsScreen() {
           </div>
 
           <Panel title="File">
-            <p className="font-mono text-[11px] text-[#8b919d]">
+            <p className="font-mono text-[13px] text-[#8b919d]">
               {config.data?.path} {config.data?.saved ? '(saved)' : '(not written yet — showing built-in defaults)'}
             </p>
           </Panel>
@@ -197,17 +197,17 @@ function Row({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-[#c0c7d4]">{label}</span>
+        <span className="text-sm text-[#c0c7d4]">{label}</span>
         <input
           type="number"
           min={min}
           max={max}
           value={value}
           onChange={(event) => onChange(Number(event.target.value))}
-          className="w-28 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1 font-mono text-xs text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
+          className="w-28 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1 font-mono text-sm text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
         />
       </div>
-      {hint && <p className="text-[11px] text-[#8b919d] leading-relaxed pr-32">{hint}</p>}
+      {hint && <p className="text-[13px] text-[#8b919d] leading-relaxed pr-32">{hint}</p>}
     </div>
   );
 }

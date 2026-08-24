@@ -57,38 +57,56 @@
   --space-xl: 24px;
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* In a CSS with cascade layers, an unlayered rule beats every layered rule regardless
+   of specificity — so this reset has to live in `@layer base` itself, or its
+   `padding: 0` would silently cancel every `padding` declared by the `components`
+   layer below (table cells included, which is exactly what was happening). */
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-body {
-  background-color: var(--bg-space);
-  color: var(--text-main);
-  font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.4;
-  letter-spacing: 0em;
-  -webkit-font-smoothing: antialiased;
-  min-height: 100vh;
-  overflow-x: hidden;
-}
+  body {
+    background-color: var(--bg-space);
+    background-image:
+      radial-gradient(ellipse 1200px 600px at 15% -10%, rgba(88, 166, 255, 0.08), transparent 60%),
+      radial-gradient(ellipse 1000px 600px at 100% 10%, rgba(137, 87, 229, 0.06), transparent 55%);
+    background-attachment: fixed;
+    color: var(--text-main);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    letter-spacing: 0em;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
 
-/* Custom Scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: var(--surface-lowest);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--border-subtle);
-  border-radius: var(--radius-sm);
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--border-strong);
+  /* A visible, on-brand focus ring for keyboard users, without the default outline
+     showing up on every mouse click. */
+  :focus-visible {
+    outline: 2px solid var(--primary-blue);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Custom Scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--surface-lowest);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-subtle);
+    border-radius: var(--radius-sm);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong);
+  }
 }
 
 /* Everything below is the Obsidian component vocabulary, declared inside Tailwind's
@@ -102,9 +120,9 @@ body {
 
 .label-caps {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 12px;
+  line-height: 14px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -112,29 +130,31 @@ body {
 
 .mono-label {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.02em;
 }
 
 .mono-data {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 /* Obsidian Panels & Card Containers */
 .obsidian-card {
   background-color: var(--surface-base);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: var(--space-md);
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl);
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 
 .obsidian-card:hover {
   border-color: var(--border-subtle);
+  box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.5);
 }
 
 .obsidian-card-interactive {
@@ -143,6 +163,11 @@ body {
 .obsidian-card-interactive:hover {
   border-color: var(--primary-blue);
   background-color: var(--surface-high);
+  box-shadow: 0 10px 28px -10px rgba(88, 166, 255, 0.25);
+  transform: translateY(-2px);
+}
+.obsidian-card-interactive:active {
+  transform: translateY(0);
 }
 
 .obsidian-card-active {
@@ -163,7 +188,7 @@ body {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .obsidian-table th {
@@ -171,17 +196,17 @@ body {
   color: var(--text-muted);
   font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 11px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 8px 12px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--border-color);
 }
 
 .obsidian-table td {
-  padding: 6px 12px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border-color);
-  height: 34px;
+  height: 42px;
   color: var(--text-main);
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -209,10 +234,10 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: var(--radius-pill);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   text-transform: uppercase;
   border: 1px solid transparent;
@@ -275,9 +300,9 @@ body {
   justify-content: center;
   gap: 6px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
-  padding: 6px 12px;
+  padding: 8px 14px;
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.15s ease;
@@ -286,13 +311,24 @@ body {
   white-space: nowrap;
 }
 
+.btn-obsidian:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn-obsidian:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .btn-primary {
   background-color: var(--primary-blue);
   color: #001c38;
   font-weight: 600;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset;
 }
 .btn-primary:hover {
   background-color: var(--primary-dim);
+  box-shadow: 0 4px 14px -4px rgba(88, 166, 255, 0.45);
 }
 
 .btn-secondary {
@@ -325,20 +361,20 @@ body {
 }
 
 .btn-sm {
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: 6px 10px;
+  font-size: 13px;
 }
 
 /* Code & Terminal Blocks */
 .terminal-block {
   background-color: var(--surface-lowest);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-none);
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--text-main);
-  padding: var(--space-md);
+  padding: var(--space-lg);
   overflow-x: auto;
 }
 
@@ -346,18 +382,26 @@ body {
 .metric-box {
   background-color: var(--surface-low);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: var(--space-md);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.metric-box:hover {
+  border-color: var(--border-subtle);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px -12px rgba(0, 0, 0, 0.5);
 }
 
 .metric-value {
   font-family: var(--font-mono);
-  font-size: 20px;
+  font-size: 26px;
   font-weight: 600;
   color: var(--text-main);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Modal Overlay */
@@ -378,12 +422,12 @@ body {
 .modal-content {
   background-color: var(--surface-base);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   width: 90%;
-  max-width: 650px;
+  max-width: 720px;
   max-height: 85vh;
   overflow-y: auto;
-  padding: var(--space-lg);
+  padding: var(--space-xl);
 }
 
 /* Animations */
@@ -394,6 +438,15 @@ body {
 
 .animate-fade-in {
   animation: fadeIn 0.2s ease-out forwards;
+}
+
+@keyframes screenIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-screen-in {
+  animation: screenIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Skeleton Loading */

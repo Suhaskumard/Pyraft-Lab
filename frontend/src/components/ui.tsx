@@ -57,7 +57,7 @@ export function Panel({
         <header className="flex items-start justify-between gap-3 mb-3">
           <div className="min-w-0">
             {title && <h2 className="label-caps text-[#e0e2ea]">{title}</h2>}
-            {subtitle && <p className="text-[11px] text-[#8b919d] mt-0.5">{subtitle}</p>}
+            {subtitle && <p className="text-[13px] text-[#8b919d] mt-0.5">{subtitle}</p>}
           </div>
           {actions && <div className="flex items-center gap-1.5 shrink-0">{actions}</div>}
         </header>
@@ -77,10 +77,10 @@ export function ScreenHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 mb-4">
+    <div className="flex items-start justify-between gap-4 mb-5 pb-5 border-b border-[#30363d]">
       <div>
-        <h1 className="text-lg font-semibold text-[#e0e2ea] tracking-tight">{title}</h1>
-        <p className="text-xs text-[#8b919d] mt-1 max-w-3xl">{description}</p>
+        <h1 className="text-2xl font-semibold text-[#e0e2ea] tracking-tight">{title}</h1>
+        <p className="text-sm text-[#8b919d] mt-1.5 max-w-3xl leading-relaxed">{description}</p>
       </div>
       {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
     </div>
@@ -118,8 +118,8 @@ export function Metric({
 export function Field({ label, value, mono = true }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-1 border-b border-[#30363d] last:border-0">
-      <span className="text-[11px] text-[#8b919d] shrink-0">{label}</span>
-      <span className={`text-xs text-[#e0e2ea] text-right truncate ${mono ? 'font-mono' : ''}`}>
+      <span className="text-[13px] text-[#8b919d] shrink-0">{label}</span>
+      <span className={`text-sm text-[#e0e2ea] text-right truncate ${mono ? 'font-mono' : ''}`}>
         {value}
       </span>
     </div>
@@ -174,10 +174,12 @@ export function Verdict({ ok, yes = 'PASS', no = 'FAIL' }: { ok: boolean | null 
 
 export function Empty({ title, hint, icon }: { title: string; hint?: string; icon?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center py-10 px-4 gap-2">
-      <div className="text-[#8b919d]">{icon ?? <Inbox className="w-6 h-6" />}</div>
-      <p className="text-sm text-[#c0c7d4]">{title}</p>
-      {hint && <p className="text-[11px] text-[#8b919d] max-w-md">{hint}</p>}
+    <div className="flex flex-col items-center justify-center text-center py-16 px-4 gap-3">
+      <div className="w-12 h-12 rounded-full bg-[#181c21] border border-[#30363d] flex items-center justify-center text-[#8b919d]">
+        {icon ?? <Inbox className="w-5 h-5" />}
+      </div>
+      <p className="text-lg text-[#c0c7d4] font-medium">{title}</p>
+      {hint && <p className="text-sm text-[#8b919d] max-w-md leading-relaxed">{hint}</p>}
     </div>
   );
 }
@@ -186,14 +188,14 @@ export function Failure({ message }: { message: string }) {
   return (
     <div className="flex items-start gap-2.5 p-3 rounded border border-[#93000a] bg-[#93000a]/15 text-[#ffb4ab]">
       <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-      <p className="text-xs leading-relaxed font-mono">{message}</p>
+      <p className="text-sm leading-relaxed font-mono">{message}</p>
     </div>
   );
 }
 
 export function Loading({ label = 'Loading' }: { label?: string }) {
   return (
-    <div className="flex items-center justify-center gap-2 py-8 text-[#8b919d] text-xs">
+    <div className="flex items-center justify-center gap-2 py-8 text-[#8b919d] text-sm">
       <Loader2 className="w-4 h-4 animate-spin" />
       {label}…
     </div>
@@ -230,13 +232,13 @@ export function RequireCluster({
   return (
     <Panel>
       <Empty
-        icon={<Server className="w-6 h-6" />}
+        icon={<Server className="w-5 h-5" />}
         title="No cluster is running"
         hint="Start one from the header to bring the live pages up. Laboratory pages — scenarios, campaigns, results — work without a running cluster."
       />
       {onStart && (
-        <div className="flex justify-center pb-2">
-          <button className="btn-obsidian btn-primary btn-sm" onClick={onStart}>
+        <div className="flex justify-center pb-3">
+          <button className="btn-obsidian btn-primary" onClick={onStart}>
             Start cluster
           </button>
         </div>
@@ -271,8 +273,8 @@ export function JobCard({ job, onCancel }: { job: Job; onCancel?: (id: string) =
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
           {job.status === 'running' && <Loader2 className="w-3.5 h-3.5 animate-spin text-[#58a6ff]" />}
-          <span className="font-mono text-xs text-[#e0e2ea] truncate">{job.id}</span>
-          <span className={`text-[10px] font-semibold uppercase tracking-wide ${tone}`}>
+          <span className="font-mono text-sm text-[#e0e2ea] truncate">{job.id}</span>
+          <span className={`text-[12px] font-semibold uppercase tracking-wide ${tone}`}>
             {job.cancelling ? 'cancelling' : job.status}
           </span>
         </div>
@@ -292,7 +294,7 @@ export function JobCard({ job, onCancel }: { job: Job; onCancel?: (id: string) =
               style={{ width: `${pct}%` }}
             />
           </div>
-          <span className="font-mono text-[10px] text-[#8b919d] shrink-0">
+          <span className="font-mono text-[12px] text-[#8b919d] shrink-0">
             {job.completed}/{job.total}
           </span>
         </div>
@@ -300,7 +302,7 @@ export function JobCard({ job, onCancel }: { job: Job; onCancel?: (id: string) =
 
       {job.error && <Failure message={job.error} />}
       {job.lines.length > 0 && (
-        <pre className="terminal-block max-h-40 overflow-y-auto text-[11px]">
+        <pre className="terminal-block max-h-40 overflow-y-auto text-[13px]">
           {job.lines.join('\n')}
         </pre>
       )}

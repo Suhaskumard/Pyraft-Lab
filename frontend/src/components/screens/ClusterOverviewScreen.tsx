@@ -211,11 +211,16 @@ export function ClusterOverviewScreen({ onInspectNode }: { onInspectNode: (id: s
 }
 
 export function EventFeed({ events, height = 'max-h-80' }: { events: { seq: number; text: string; kind: string }[]; height?: string }) {
-  const bottom = useRef<HTMLDivElement>(null);
+  const container = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
 
+  // Scroll only this panel's own container, not `scrollIntoView` on the bottom
+  // sentinel — that walks every scrollable ancestor, so the whole page would jump
+  // to keep this in view instead of just the feed itself.
   useEffect(() => {
-    if (follow) bottom.current?.scrollIntoView({ block: 'nearest' });
+    if (follow && container.current) {
+      container.current.scrollTop = container.current.scrollHeight;
+    }
   }, [events, follow]);
 
   if (!events.length) {
@@ -233,7 +238,7 @@ export function EventFeed({ events, height = 'max-h-80' }: { events: { seq: numb
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="flex items-center gap-2 text-[11px] text-[#8b919d] cursor-pointer self-end">
+      <label className="flex items-center gap-2 text-[13px] text-[#8b919d] cursor-pointer self-end">
         <input
           type="checkbox"
           checked={follow}
@@ -242,13 +247,12 @@ export function EventFeed({ events, height = 'max-h-80' }: { events: { seq: numb
         />
         Follow tail
       </label>
-      <div className={`terminal-block ${height} overflow-y-auto flex flex-col`}>
+      <div ref={container} className={`terminal-block ${height} overflow-y-auto flex flex-col`}>
         {events.map((event) => (
           <span key={event.seq} className={colour(event.kind)}>
             {event.text}
           </span>
         ))}
-        <div ref={bottom} />
       </div>
     </div>
   );
@@ -299,7 +303,7 @@ function Console() {
             onChange={(event) => setLine(event.target.value)}
             onKeyDown={(event) => event.key === 'Enter' && void run()}
             placeholder="put color blue"
-            className="flex-1 bg-[#0b0e14] border border-[#30363d] rounded px-2.5 py-1.5 font-mono text-xs text-[#e0e2ea] placeholder:text-[#8b919d] focus:border-[#58a6ff] outline-none"
+            className="flex-1 bg-[#0b0e14] border border-[#30363d] rounded px-2.5 py-1.5 font-mono text-sm text-[#e0e2ea] placeholder:text-[#8b919d] focus:border-[#58a6ff] outline-none"
           />
           <button className="btn-obsidian btn-primary btn-sm" onClick={() => void run()} disabled={busy}>
             <CornerDownLeft className="w-3 h-3" />

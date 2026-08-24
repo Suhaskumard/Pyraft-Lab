@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Shield } from 'lucide-react';
 import { api } from './api/client';
 import { LabProvider, useLab } from './api/LabContext';
 import { Header } from './components/Header';
@@ -118,10 +119,10 @@ function Workbench() {
   const needsCluster = LIVE_SCREENS.has(activeScreen) && !running;
 
   return (
-    <div className="min-h-screen bg-[#101419] text-[#e0e2ea] flex flex-col font-sans">
+    <div className="h-screen bg-[#101419] text-[#e0e2ea] flex flex-col font-sans overflow-hidden">
       <Header onOpenCommandPalette={() => setPaletteOpen(true)} />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0">
         <Navigation
           activeScreen={activeScreen}
           onSelectScreen={setActiveScreen}
@@ -129,10 +130,14 @@ function Workbench() {
           liveScreens={LIVE_SCREENS}
         />
 
-        <main className="flex-1 p-5 overflow-y-auto h-[calc(100vh-57px)] bg-[#0b0e14]">
-          <ScreenErrorBoundary resetKey={activeScreen}>
-            {needsCluster ? <ClusterRequired /> : screen()}
-          </ScreenErrorBoundary>
+        <main className="flex-1 p-6 lg:p-8 xl:p-10 overflow-y-auto h-full bg-[#0b0e14]">
+          <div className="max-w-[2400px] mx-auto">
+            <ScreenErrorBoundary resetKey={activeScreen}>
+              <div key={activeScreen} className="animate-screen-in">
+                {needsCluster ? <ClusterRequired /> : screen()}
+              </div>
+            </ScreenErrorBoundary>
+          </div>
         </main>
       </div>
 
@@ -149,16 +154,19 @@ function Workbench() {
 function ClusterRequired() {
   const lab = useLab();
   return (
-    <div className="max-w-xl mx-auto mt-16">
-      <div className="obsidian-card text-center py-10 px-6">
-        <h2 className="text-base font-semibold text-[#e0e2ea]">This page needs a live cluster</h2>
-        <p className="text-xs text-[#8b919d] mt-2 leading-relaxed">
+    <div className="h-full flex items-center justify-center">
+      <div className="obsidian-card text-center py-16 px-10 max-w-xl">
+        <div className="w-14 h-14 rounded-full bg-[#181c21] border border-[#30363d] flex items-center justify-center mx-auto mb-5">
+          <Shield className="w-6 h-6 text-[#58a6ff]" />
+        </div>
+        <h2 className="text-xl font-semibold text-[#e0e2ea]">This page needs a live cluster</h2>
+        <p className="text-base text-[#8b919d] mt-3 leading-relaxed">
           There is no daemon behind PyRaft Lab — a cluster lives inside the API process for
           exactly as long as it is running. Start one to bring the live pages up. The
           laboratory pages (scenarios, campaigns, results, replay) work without one.
         </p>
         <button
-          className="btn-obsidian btn-primary btn-sm mt-4"
+          className="btn-obsidian btn-primary mt-6"
           onClick={() => void lab.act('start cluster', () => api.startCluster({}))}
         >
           Start cluster

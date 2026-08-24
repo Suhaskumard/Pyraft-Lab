@@ -139,7 +139,7 @@ export function KeyValueStoreScreen() {
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
             placeholder="filter keys…"
-            className="bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1 font-mono text-xs text-[#e0e2ea] placeholder:text-[#8b919d] focus:border-[#58a6ff] outline-none w-40"
+            className="bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1 font-mono text-sm text-[#e0e2ea] placeholder:text-[#8b919d] focus:border-[#58a6ff] outline-none w-40"
           />
         }
       >
@@ -207,7 +207,7 @@ function Input({
       value={value}
       placeholder={placeholder}
       onChange={(event) => onChange(event.target.value)}
-      className="bg-[#0b0e14] border border-[#30363d] rounded px-2.5 py-1.5 font-mono text-xs text-[#e0e2ea] placeholder:text-[#8b919d] focus:border-[#58a6ff] outline-none"
+      className="bg-[#0b0e14] border border-[#30363d] rounded px-2.5 py-1.5 font-mono text-sm text-[#e0e2ea] placeholder:text-[#8b919d] focus:border-[#58a6ff] outline-none"
     />
   );
 }

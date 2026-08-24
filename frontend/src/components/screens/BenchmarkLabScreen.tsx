@@ -58,7 +58,7 @@ export function BenchmarkLabScreen() {
               type="number"
               value={seed}
               onChange={(event) => setSeed(Number(event.target.value))}
-              className="w-24 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1.5 font-mono text-xs text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
+              className="w-24 bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1.5 font-mono text-sm text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
             />
           </label>
           <button
@@ -113,7 +113,7 @@ export function BenchmarkLabScreen() {
                     const width = cell ? (cell.throughput_per_sec / peakThroughput) * 100 : 0;
                     return (
                       <div key={loss} className="flex items-center gap-2">
-                        <span className="font-mono text-[11px] text-[#8b919d] w-12 shrink-0 text-right">
+                        <span className="font-mono text-[13px] text-[#8b919d] w-12 shrink-0 text-right">
                           {(loss * 100).toFixed(0)}%
                         </span>
                         <div className="flex-1 h-4 bg-[#181c21] rounded-sm overflow-hidden border border-[#30363d]">
@@ -122,7 +122,7 @@ export function BenchmarkLabScreen() {
                             style={{ width: `${width}%` }}
                           />
                         </div>
-                        <span className="font-mono text-[11px] text-[#e0e2ea] w-20 shrink-0 text-right">
+                        <span className="font-mono text-[13px] text-[#e0e2ea] w-20 shrink-0 text-right">
                           {cell ? `${cell.throughput_per_sec.toFixed(1)} /s` : '—'}
                         </span>
                       </div>
@@ -190,7 +190,7 @@ export function BenchmarkLabScreen() {
             <Panel title="Comparison graphs" subtitle="written to the workspace">
               <ul className="flex flex-col gap-1">
                 {report.graphs.map((path) => (
-                  <li key={path} className="font-mono text-[11px] text-[#8b919d]">
+                  <li key={path} className="font-mono text-[13px] text-[#8b919d]">
                     {path}
                   </li>
                 ))}
@@ -220,7 +220,7 @@ function Field({
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className={`${width} bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1.5 font-mono text-xs text-[#e0e2ea] focus:border-[#58a6ff] outline-none`}
+        className={`${width} bg-[#0b0e14] border border-[#30363d] rounded px-2 py-1.5 font-mono text-sm text-[#e0e2ea] focus:border-[#58a6ff] outline-none`}
       />
     </label>
   );

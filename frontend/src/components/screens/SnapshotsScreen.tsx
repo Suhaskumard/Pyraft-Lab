@@ -69,7 +69,7 @@ export function SnapshotsScreen() {
           <button
             key={node.id}
             onClick={() => setNodeId(node.id)}
-            className={`px-3 py-1.5 rounded border font-mono text-xs transition-all ${
+            className={`px-3 py-1.5 rounded border font-mono text-sm transition-all ${
               node.id === selected
                 ? 'border-[#58a6ff] bg-[#1c2025] text-[#58a6ff]'
                 : 'border-[#30363d] bg-[#181c21] text-[#c0c7d4] hover:border-[#414752]'
@@ -77,7 +77,7 @@ export function SnapshotsScreen() {
           >
             {node.id}
             {node.snapshotCount > 0 && (
-              <span className="ml-2 text-[10px] text-[#4ade80]">{node.snapshotCount}</span>
+              <span className="ml-2 text-[12px] text-[#4ade80]">{node.snapshotCount}</span>
             )}
           </button>
         ))}
@@ -120,7 +120,7 @@ export function SnapshotsScreen() {
                     <td className="font-mono text-right">{snapshot.lastIncludedIndex}</td>
                     <td className="font-mono text-right">{snapshot.lastIncludedTerm}</td>
                     <td className="font-mono text-right">{snapshot.keys}</td>
-                    <td className="font-mono text-[11px] text-[#8b919d]">
+                    <td className="font-mono text-[13px] text-[#8b919d]">
                       {snapshot.checksum}
                       <span className="ml-2 text-[#4ade80]">verified</span>
                     </td>

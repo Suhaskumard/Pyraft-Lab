@@ -64,13 +64,13 @@ export function ArchitectureScreen() {
               style={{ borderLeft: `3px solid ${layer.accent}` }}
             >
               <div className="flex flex-wrap items-baseline justify-between gap-3">
-                <h3 className="text-sm font-semibold" style={{ color: layer.accent }}>
+                <h3 className="text-base font-semibold" style={{ color: layer.accent }}>
                   {layer.name}
                 </h3>
-                <span className="font-mono text-[11px] text-[#e0e2ea]">{layer.live}</span>
+                <span className="font-mono text-[13px] text-[#e0e2ea]">{layer.live}</span>
               </div>
-              <p className="text-xs text-[#c0c7d4] mt-1">{layer.detail}</p>
-              <p className="text-[11px] text-[#8b919d] mt-2 leading-relaxed">{layer.note}</p>
+              <p className="text-sm text-[#c0c7d4] mt-1">{layer.detail}</p>
+              <p className="text-[13px] text-[#8b919d] mt-2 leading-relaxed">{layer.note}</p>
             </div>
             {index < layers.length - 1 && <div className="h-4 w-px bg-[#30363d]" />}
           </div>
@@ -79,7 +79,7 @@ export function ArchitectureScreen() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Panel title="Why there is no daemon">
-          <p className="text-xs text-[#c0c7d4] leading-relaxed">
+          <p className="text-sm text-[#c0c7d4] leading-relaxed">
             A cluster lives inside the process serving this API and lives for exactly as long as
             it. No PID file, no socket, no background service. The project already rejects real
             kernel sockets for node-to-node traffic — a real socket is precisely the source of
@@ -90,7 +90,7 @@ export function ArchitectureScreen() {
         </Panel>
 
         <Panel title="Why campaigns get their own threads">
-          <p className="text-xs text-[#c0c7d4] leading-relaxed">
+          <p className="text-sm text-[#c0c7d4] leading-relaxed">
             An experiment runs on a virtual clock that advances as fast as the CPU allows and
             never yields to real time. Awaiting one on this API's event loop would freeze the
             live cluster sharing that loop — its heartbeat and election timers run on a wall

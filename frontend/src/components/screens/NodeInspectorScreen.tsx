@@ -55,7 +55,7 @@ export function NodeInspectorScreen({
           <button
             key={candidate.id}
             onClick={() => onSelectNode(candidate.id)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded border text-xs transition-all ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded border text-sm transition-all ${
               candidate.id === nodeId
                 ? 'border-[#58a6ff] bg-[#1c2025] text-[#58a6ff]'
                 : 'border-[#30363d] bg-[#181c21] text-[#c0c7d4] hover:border-[#414752]'
@@ -196,7 +196,7 @@ export function NodeInspectorScreen({
                           <td className="font-mono text-right">{entry.index}</td>
                           <td className="font-mono text-right text-[#58a6ff]">{entry.term}</td>
                           <td className="font-mono">{entry.command}</td>
-                          <td className="text-[11px] font-mono text-[#8b919d]">
+                          <td className="text-[13px] font-mono text-[#8b919d]">
                             {entry.applied ? 'applied' : entry.committed ? 'committed' : 'pending'}
                           </td>
                         </tr>

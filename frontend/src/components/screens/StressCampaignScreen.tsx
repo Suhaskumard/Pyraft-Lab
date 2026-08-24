@@ -99,12 +99,12 @@ export function StressCampaignScreen() {
                         <td className={trial.divergent ? 'text-[#ffb4ab]' : 'text-[#8b919d]'}>
                           {trial.divergent ? 'yes' : 'no'}
                         </td>
-                        <td className="font-mono text-[11px] text-[#8b919d]">
+                        <td className="font-mono text-[13px] text-[#8b919d]">
                           {trial.linearizable_verdict}
                         </td>
                         <td className="font-mono text-right">{fmtMs(trial.recovery_time_ms)}</td>
                         <td><Verdict ok={trial.passed} /></td>
-                        <td className="font-mono text-[11px] text-[#8b919d]">{trial.run_id}</td>
+                        <td className="font-mono text-[13px] text-[#8b919d]">{trial.run_id}</td>
                       </tr>
                     ))}
                   </tbody>

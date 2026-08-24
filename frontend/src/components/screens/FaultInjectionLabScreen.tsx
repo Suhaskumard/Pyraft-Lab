@@ -111,7 +111,7 @@ export function FaultInjectionLabScreen() {
                   // A toggle, not a command: which side a node is on is otherwise only
                   // legible as a border colour.
                   aria-pressed={group.has(node.id)}
-                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs transition-all ${
+                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded border text-sm transition-all ${
                     group.has(node.id)
                       ? 'border-[#8957e5] bg-[#8957e5]/10 text-[#d3bbff]'
                       : 'border-[#30363d] bg-[#181c21] text-[#c0c7d4] hover:border-[#414752]'
@@ -123,14 +123,14 @@ export function FaultInjectionLabScreen() {
               ))}
             </div>
 
-            <p className="text-[11px] text-[#8b919d] font-mono">
+            <p className="text-[13px] text-[#8b919d] font-mono">
               {canSplit
                 ? `{${[...group].join(', ')}}  ✂  {${others.join(', ')}}`
                 : 'select at least one node, and leave at least one out'}
             </p>
 
             {canSplit && group.size * 2 === nodes.length && (
-              <p className="text-[11px] text-[#ffba42]">
+              <p className="text-[13px] text-[#ffba42]">
                 An even split leaves neither side with a majority — expect no leader anywhere.
               </p>
             )}
@@ -159,7 +159,7 @@ export function FaultInjectionLabScreen() {
             </div>
 
             {faults.data?.partitioned && (
-              <div className="text-[11px] font-mono text-[#ffb4ab] border border-[#93000a] rounded p-2">
+              <div className="text-[13px] font-mono text-[#ffb4ab] border border-[#93000a] rounded p-2">
                 current split:{' '}
                 {faults.data.partitionGroups.map((g) => `{${g.join(', ')}}`).join(' | ')}
               </div>
@@ -172,7 +172,7 @@ export function FaultInjectionLabScreen() {
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="label-caps">Latency</span>
-                <span className="font-mono text-xs text-[#58a6ff]">
+                <span className="font-mono text-sm text-[#58a6ff]">
                   {minMs}–{maxMs} ms
                 </span>
               </div>
@@ -186,14 +186,14 @@ export function FaultInjectionLabScreen() {
                 Apply latency
               </button>
               {minMs > maxMs && (
-                <p className="text-[11px] text-[#ffb4ab]">min must not exceed max</p>
+                <p className="text-[13px] text-[#ffb4ab]">min must not exceed max</p>
               )}
             </div>
 
             <div className="flex flex-col gap-2 pt-3 border-t border-[#30363d]">
               <div className="flex items-center justify-between">
                 <span className="label-caps">Packet loss</span>
-                <span className="font-mono text-xs text-[#ffba42]">{loss}%</span>
+                <span className="font-mono text-sm text-[#ffba42]">{loss}%</span>
               </div>
               <Slider label="drop" value={loss} max={100} onChange={setLoss} />
               <button
@@ -203,7 +203,7 @@ export function FaultInjectionLabScreen() {
                 Apply loss
               </button>
               {loss >= 50 && (
-                <p className="text-[11px] text-[#ffba42]">
+                <p className="text-[13px] text-[#ffba42]">
                   Above roughly half, a cluster spends most of its time electing rather than
                   replicating — which is itself worth watching.
                 </p>
@@ -222,7 +222,7 @@ export function FaultInjectionLabScreen() {
                   key={node.id}
                   className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded bg-[#181c21] border border-[#30363d]"
                 >
-                  <span className="font-mono text-xs">{node.id}</span>
+                  <span className="font-mono text-sm">{node.id}</span>
                   <RolePill role={node.role} />
                   {node.alive ? (
                     <button
@@ -267,7 +267,7 @@ function Slider({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="flex items-center gap-3 text-[11px] text-[#8b919d]">
+    <label className="flex items-center gap-3 text-[13px] text-[#8b919d]">
       <span className="w-8 shrink-0">{label}</span>
       <input
         type="range"
@@ -283,7 +283,7 @@ function Slider({
         max={max}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="w-16 bg-[#0b0e14] border border-[#30363d] rounded px-1.5 py-0.5 font-mono text-xs text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
+        className="w-16 bg-[#0b0e14] border border-[#30363d] rounded px-1.5 py-0.5 font-mono text-sm text-[#e0e2ea] focus:border-[#58a6ff] outline-none"
       />
     </label>
   );
