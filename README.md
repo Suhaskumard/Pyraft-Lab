@@ -1,81 +1,158 @@
-# PyRaft Lab
+<div align="center">
+  <h1>🚢 PyRaft Lab</h1>
+  <p><strong>A deterministic Raft consensus implementation and interactive laboratory in Python.</strong></p>
+  <p>
+    <a href="#about-the-project">About</a> •
+    <a href="#key-components">Components</a> •
+    <a href="#quick-start">Quick Start</a> •
+    <a href="#the-laboratory">The Laboratory</a> •
+    <a href="#documentation">Docs</a>
+  </p>
+</div>
 
-PyRaft Lab is a from-scratch Raft consensus implementation in Python, wrapped around a replicated key-value store. It features a deterministic fault-injection network simulator, an experiment runner, an interactive CLI, an HTTP API, and a React-based web frontend.
+---
 
-This project is divided into two main components:
-1. **[Backend (pyraft_lab)](./pyraft_lab/README.md)**: The core Raft consensus implementation, key-value store, WAL, snapshots, fault injection laboratory, and HTTP API server.
-2. **[Frontend](./frontend/README.md)**: A React-based workbench that provides a visual interface for interacting with the live cluster, inspecting the WAL/snapshots, and managing experiment campaigns.
+## 📖 About the Project
 
-## Directory Layout
+Building a distributed consensus algorithm is notoriously difficult; verifying it is even harder. **PyRaft Lab** was built to solve both. It's not just a from-scratch implementation of the [Raft Consensus Algorithm](https://raft.github.io/) in Python—it's a complete, deterministic testing laboratory. 
 
-```text
-Pyraft-Lab/
-├── pyraft_lab/             # Backend: Python Raft core, lab, and HTTP API
-│   ├── src/pyraft_lab/
-│   │   ├── raft/           # Consensus: state, RPCs, election, replication, persistence
-│   │   ├── kv/             # Replicated key-value state machine
-│   │   ├── network/        # Transports, virtual clock, and fault simulator
-│   │   ├── cluster/        # Cluster manager, config and lifecycle
-│   │   ├── client/         # Leader-discovering client and workload generators
-│   │   ├── experiments/    # Scenario runner, stress/chaos/benchmark campaigns
-│   │   ├── dashboard/      # Live terminal dashboard for interactive sessions
-│   │   ├── cli/            # pyraft-lab command line tool
-│   │   └── observability/  # Event tracing and metrics
-│   ├── scenarios/          # YAML experiment definitions
-│   ├── docs/               # Architecture notes and the technical report
-│   └── tests/              # Unit, integration, and property tests
-│
-└── frontend/               # Frontend: React web interface
-    ├── src/
-    │   ├── api/            # API client for the Python backend
-    │   ├── components/     # React UI components (cluster view, dashboard, campaigns)
-    │   └── types/          # TypeScript definitions
-    └── package.json        # Frontend dependencies and scripts
-```
+At its core, it features a replicated Key-Value (KV) store built on top of a Raft state machine. Surrounding the core is a discrete-event network simulator that gives you "God mode" over the cluster. You can pause time, drop packets, sever network links, and trigger chaos monkeys—all with perfectly reproducible results.
 
-## Quick Start
+Whether you're studying distributed systems, verifying linearizability under extreme failure scenarios, or just want a visual way to watch leader elections happen, PyRaft Lab provides the tooling to do it interactively.
 
-### 1. Backend Setup
+---
 
-The backend requires Python 3.11+.
+## 🏗️ Key Components
+
+The repository is structured into two main ecosystems: the Python backend (consensus and simulation) and the React frontend (visualization).
+
+### 1. The Core (Backend)
+- **Consensus Engine**: Implements the full Raft paper. Leader election with randomized timeouts, log replication, safety property enforcement, and commit tracking.
+- **Persistence Layer**: Custom Write-Ahead Log (WAL) and state machine snapshots. Nodes can violently crash and perfectly recover their state from disk.
+- **Replicated KV Store**: A practical state machine sitting on top of Raft. Supports standard `GET`, `PUT`, and `DELETE` operations with strong consistency guarantees.
+- **Discrete-Event Simulator**: Instead of relying on system clocks and real sockets, time is virtualized. Network transports are simulated, allowing for instant "time travel" during tests and deterministic playback of edge cases.
+
+### 2. The Tools
+- **Campaign Runner**: Define experiments in YAML (e.g., "start 5 nodes, kill the leader after 10s, partition node 3"). The runner executes these campaigns, injecting faults and validating cluster health.
+- **Interactive CLI**: A rich terminal interface (`pyraft-lab`) for managing the cluster, inspecting logs, and triggering manual failovers.
+- **REST API**: A FastAPI backend that exposes cluster topology, metrics, and state machine queries.
+
+### 3. The Dashboard (Frontend)
+A React-based web interface for the API. It provides visual observability into the cluster:
+- Watch log replication happen in real-time.
+- View leader/follower states and term numbers.
+- Monitor active campaigns and chaos experiments.
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- **Python 3.11+**
+- **Node.js 18+**
+
+### Backend Setup
+
+Navigate into the backend directory and install the project along with its API dependencies. We recommend using a virtual environment.
 
 ```bash
 cd pyraft_lab
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -e ".[api]"
 ```
 
-Initialize the cluster and start the API server:
+Initialize your first cluster and boot up the API server:
+
 ```bash
+# Generates default configuration and genesis state
 pyraft-lab init
+
+# Starts the local API server on port 8000
 pyraft-lab serve
 ```
-The API will be available at `http://127.0.0.1:8000` (Visit `/docs` for the OpenAPI interactive documentation).
 
-### 2. Frontend Setup
+*Head over to `http://127.0.0.1:8000/docs` to see the interactive OpenAPI endpoints.*
 
-In a new terminal window, start the React development server:
+### Frontend Setup
+
+In a **separate terminal window**, spin up the React development server:
 
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-The frontend application will be available at `http://localhost:5173`.
 
-## Features
+*The frontend UI will be running at `http://localhost:5173`.*
 
-- **Raft Consensus & KV Store**: Complete implementation of leader election, log replication, persistence (WAL + Snapshots), and crash recovery.
-- **Laboratory & Simulator**: Deterministic network simulator with partitions, packet loss, and latency injection.
-- **Stress & Chaos Testing**: Auto-generated stress campaigns and randomized chaos testing to ensure linearizability and zero data loss.
-- **Benchmarking**: Compare throughput, latency, and recovery time across different cluster sizes and network conditions.
-- **Web Dashboard & CLI**: Full interactive control over the cluster via the terminal CLI (`pyraft-lab cluster start`) or the React frontend.
+---
 
-## Documentation
+## 🧪 The Laboratory: Chaos & Fault Injection
 
-For a deep dive into the architecture, technical decisions, and benchmark reports, please refer to the documentation within the `pyraft_lab/docs/` directory:
-- [Architecture & Design Notes](./pyraft_lab/docs/architecture.md)
-- [Development Plan](./pyraft_lab/docs/plan.md)
-- [Technical Report](./pyraft_lab/docs/technical_report.md)
+The real power of PyRaft Lab lies in its testing capabilities. Because the network and system clock are virtualized, you can write deterministic tests that simulate years of cluster uptime in seconds.
 
-## License
-MIT
+### Defining a Scenario
+Scenarios are defined in YAML. Here's an example of a simple partition test:
+
+```yaml
+name: Network Partition Tolerance
+cluster_size: 5
+steps:
+  - wait: 2000  # Let leader election finish
+  - action: partition
+    nodes: [node-1, node-2]
+    duration: 5000
+  - wait: 6000
+  - assert: has_leader
+```
+
+You can run these campaigns directly from the CLI:
+
+```bash
+pyraft-lab run-campaign scenarios/partition_test.yaml
+```
+
+During execution, the CLI will output a detailed timeline of events, dropped messages, and state transitions.
+
+---
+
+## 📂 Directory Layout
+
+```text
+Pyraft-Lab/
+├── pyraft_lab/             # Core Python package
+│   ├── src/pyraft_lab/
+│   │   ├── raft/           # The consensus algorithm (RPCs, election, replication)
+│   │   ├── kv/             # Key-Value state machine
+│   │   ├── network/        # Virtual clock & deterministic simulator
+│   │   ├── cluster/        # Node orchestration and lifecycle
+│   │   ├── experiments/    # Scenario engine and chaos campaigns
+│   │   ├── cli/            # `pyraft-lab` entrypoints
+│   │   └── api/            # FastAPI server
+│   ├── scenarios/          # Pre-built chaos experiments
+│   ├── docs/               # Technical write-ups and design notes
+│   └── tests/              # Pytest suite (unit, integration, property tests)
+│
+└── frontend/               # React Dashboard
+    ├── src/
+    │   ├── components/     # UI widgets for nodes, logs, and graphs
+    │   └── api/            # Client for the Python backend
+    └── package.json
+```
+
+---
+
+## 📖 Deep Dive Documentation
+
+If you're interested in the implementation details, how the discrete-event simulator works, or our performance benchmarks, check out the docs:
+
+- 🏗️ **[Architecture & Design Notes](./pyraft_lab/docs/architecture.md)**
+- 🗺️ **[Development Plan](./pyraft_lab/docs/plan.md)**
+- 📄 **[Technical Report](./pyraft_lab/docs/technical_report.md)**
+
+---
+
+## 📜 License
+
+This project is open-sourced under the **MIT License**. See `LICENSE` for details.
