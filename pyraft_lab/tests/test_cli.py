@@ -46,6 +46,21 @@ expected:
 """
 
 
+# --- kinds -------------------------------------------------------------------------------
+
+
+def test_kinds_lists_the_raft_rpcs_not_just_the_test_kinds() -> None:
+    """A fresh process has not yet imported ``pyraft_lab.raft`` when this command
+    runs, since ``Message`` subclasses only register themselves on import - so the
+    command must import the raft RPC module itself, or it silently reports only
+    ``blob``/``ping``/``pong`` and never the kinds a real cluster puts on the wire.
+    """
+    result = runner.invoke(app, ["kinds"])
+    assert result.exit_code == 0
+    kinds = set(result.stdout.split())
+    assert {"request_vote", "request_vote_reply", "append_entries", "append_entries_reply"} <= kinds
+
+
 # --- init --------------------------------------------------------------------------------
 
 

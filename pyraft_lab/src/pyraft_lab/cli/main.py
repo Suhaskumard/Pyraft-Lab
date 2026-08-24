@@ -57,6 +57,7 @@ def version() -> None:
 @app.command()
 def kinds() -> None:
     """List the message kinds this build can put on the wire."""
+    import pyraft_lab.raft  # noqa: F401  (registers RequestVote/AppendEntries/etc.)
     from pyraft_lab.network import registered_kinds
 
     for kind in sorted(registered_kinds()):
